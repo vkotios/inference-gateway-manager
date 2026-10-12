@@ -1,0 +1,28 @@
+# Install as /etc/systemd/system/inference-gateway-manager.service.
+# Replace igm and /opt/inference-gateway-manager with your account/install path.
+[Unit]
+Description=LAN inference gateway manager (boot without login)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=igm
+Group=igm
+WorkingDirectory=/opt/inference-gateway-manager
+EnvironmentFile=/opt/inference-gateway-manager/.local/credentials.env
+ExecStart=/opt/inference-gateway-manager/.venv/bin/python -m gateway serve --config /opt/inference-gateway-manager/config.local.json --state-dir /opt/inference-gateway-manager/.local/state
+Restart=always
+RestartSec=5
+WatchdogSec=30
+TimeoutStartSec=60
+TimeoutStopSec=40
+KillMode=control-group
+TimeoutStopFailureMode=kill
+UMask=0077
+# Do not add NoNewPrivileges=yes if the optional sudo recovery helper is enabled.
+
+[Install]
+WantedBy=multi-user.target

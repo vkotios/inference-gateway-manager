@@ -1,0 +1,5 @@
+# Replace igm with the unprivileged service account. Install via visudo -f.
+# Helper MUST be root-owned, not writable by the service account, and use python -I.
+igm ALL=(root) NOPASSWD: /usr/local/libexec/igm-recovery restart-gateway
+# Host reboot is disabled by default. Uncomment ONLY if explicitly desired:
+# igm ALL=(root) NOPASSWD: /usr/local/libexec/igm-recovery reboot-host

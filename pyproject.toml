@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[project]
+name = "inference-gateway-manager"
+version = "0.1.0"
+description = "Single-engine Linux inference gateway with LAN control and telemetry"
+authors = [{name = "vkotios"}]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "httpx>=0.28,<1", "uvicorn>=0.34,<1", "psutil>=6,<8"]
+[project.urls]
+Homepage = "https://github.com/vkotios/inference-gateway-manager"
+Issues = "https://github.com/vkotios/inference-gateway-manager/issues"
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.11,<1", "build>=1,<2"]
+[project.scripts]
+inference-gateway = "gateway.__main__:main"
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+[tool.hatch.build.targets.wheel]
+packages = ["gateway"]
+[tool.ruff]
+line-length = 100
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]

@@ -1,0 +1,19 @@
+# Copy to ~/.config/systemd/user/ and replace /opt/inference-gateway-manager.
+[Unit]
+Description=LAN inference gateway manager
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/inference-gateway-manager
+EnvironmentFile=/opt/inference-gateway-manager/.local/credentials.env
+ExecStart=/opt/inference-gateway-manager/.venv/bin/python -m gateway serve --config /opt/inference-gateway-manager/config.local.json --state-dir /opt/inference-gateway-manager/.local/state
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+KillMode=control-group
+TimeoutStopFailureMode=kill
+UMask=0077
+
+[Install]
+WantedBy=default.target

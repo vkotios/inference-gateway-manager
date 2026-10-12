@@ -1,0 +1,88 @@
+{
+  "host": "127.0.0.1",
+  "port": 9000,
+  "recovery": {
+    "restart_gateway": false,
+    "reboot_host": false
+  },
+  "allowed_hosts": [
+    "127.0.0.1",
+    "localhost"
+  ],
+  "allowed_networks": [
+    "127.0.0.0/8"
+  ],
+  "native_matchers": [
+    {
+      "exe": "llama-server"
+    },
+    {
+      "argv_contains": "serve.server"
+    },
+    {
+      "exe": "ds4-server"
+    }
+  ],
+  "engines": {
+    "llama": {
+      "models": {
+        "example-llama": {
+          "argv": [
+            "/opt/llama/llama-server",
+            "-m",
+            "/opt/models/model.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8080",
+            "--slots",
+            "--ctx-size",
+            "32768"
+          ],
+          "base_url": "http://127.0.0.1:8080",
+          "context": 32768
+        }
+      }
+    },
+    "strata": {
+      "models": {
+        "qwen3.8-flash-next": {
+          "argv": [
+            "/opt/strata/.venv/bin/python",
+            "-m",
+            "serve.server",
+            "--engine",
+            "strata",
+            "--config",
+            "/opt/strata/strata.local.json"
+          ],
+          "cwd": "/opt/strata",
+          "base_url": "http://127.0.0.1:8081",
+          "context": 262144,
+          "upstream_model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
+        }
+      }
+    },
+    "dwarfstar": {
+      "models": {
+        "deepseek-v4-flash": {
+          "argv": [
+            "/opt/ds4/ds4-server",
+            "-m",
+            "/opt/models/deepseek.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+            "--ctx",
+            "65536"
+          ],
+          "base_url": "http://127.0.0.1:8000",
+          "context": 65536,
+          "ready_path": "/v1/models",
+          "probe": "gateway_only"
+        }
+      }
+    }
+  }
+}
