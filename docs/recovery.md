@@ -70,3 +70,21 @@ Keep `NOTIFY_SOCKET` and watchdog variables private to the manager; engines must
 ## Acceptance and power-loss limits
 
 Verify boot-before-login, configured default load, remote reconnect, watchdog recovery and optional reboot on the **target deployment** during a maintenance window. Unit-file validation and successful scheduling tests do not certify an actual host reboot. Abrupt power loss also requires firmware power-on-after-AC-restoration, headless storage access, and preferably a UPS. No service can resume a lost request or recover a host that has not powered back on.
+
+### Controlled boot acceptance
+
+1. Obtain explicit permission for a host reboot; it interrupts every workload, not just inference. Record `/proc/sys/kernel/random/boot_id`, the configured default, gateway/native process identities and the current deployed version. Check admitted requests and native occupancy before proceeding. Do not ignore reboot inhibitors or force an unknown workload to stop.
+2. Arrange a boot-started verifier and a durable evidence location before rebooting. An enabled system service or a lingering user's enabled unit can run the verifier, but a user unit's network target does not order it against system networking. Wait for actual authenticated status and backend readiness rather than assuming target ordering proves readiness.
+3. Keep the local console logged out until the verifier finishes. Record that the boot ID changed and no interactive login preceded the readiness and inference checks. PID numbers may repeat across boots; compare the boot identity as well as process identities.
+4. Require the configured default engine/model to become `ready`, the expected native context to be loaded, and known idle occupancy. Run a short real inference through `/v1/chat/completions` with the inference credential, then verify the expected output and final ready/idle status. `/health`, `/v1/models` or an enabled unit alone is not an inference pass.
+5. Save the receipt and inspect the supervisor journal on failure. A verifier that times out or observes an earlier interactive login must not claim boot-before-login acceptance. Remove or disable temporary verification jobs after inspection. One authorized maintenance reboot does not authorize enabling the permanent `reboot_host` capability or its sudoers rule.
+
+### Second-device LAN acceptance
+
+Use a genuinely separate machine on the allowed LAN, not this host requesting its own interface address. Use TLS or a trusted isolated LAN/tunnel; never put credentials in URLs, command arguments, screenshots or shared logs.
+
+- Open the configured gateway origin in a browser and authenticate with the private **control** key. Confirm the dashboard shows the restored default and live status/telemetry. Check for asset, connection and authorization errors.
+- Configure an OpenAI-compatible client with the gateway's `/v1` base URL and private **inference** key. Confirm `/v1/models`, a short Chat Completions request and a streaming request work. Test tool calls separately before relying on a coding workflow.
+- Confirm the inference key cannot access `/api/status` (HTTP 403); do not provide the control key to a coding client. Keep native engine ports loopback-only.
+- For an explicitly authorized switching test, select an engine before its model and verify the previous native process exited before loading the next. Restore the configured default afterward. Do not use force on somebody else's active work.
+- Record the client device, tested endpoints and actual results privately. A successful same-host LAN-address test or short smoke does not establish second-device connectivity, sustained client endurance or power-loss recovery.
