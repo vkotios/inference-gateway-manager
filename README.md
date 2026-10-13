@@ -100,7 +100,6 @@ See [client configuration](docs/clients.md). The stable base URL is `http://GATE
 
 [`skills/inference-gateway-manager/SKILL.md`](skills/inference-gateway-manager/SKILL.md) is a portable operating procedure for HTTP-capable AI agents. Install it using your agent harness's documented skill mechanism; merely cloning the repository does not load it. It does not implement orchestration, grant permissions or enforce a distributed lock.
 
-The Coral/Bone Circuit Relay mark retains a faded third input to suggest expandability, not measured runtime status. Dark/light/monochrome SVGs, a favicon and a social-preview image are included; see [brand assets](docs/branding.md). GitHub's custom social preview requires a separate repository-settings upload.
 
 ## Development
 
