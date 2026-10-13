@@ -1,4 +1,13 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+  <img src="docs/assets/logo-light.svg" alt="IGM Circuit Relay" width="300">
+</picture>
+
 # Inference Gateway Manager
+
+**One engine. One model. One gateway.**
+
+[Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md)
 
 A small Linux control plane for **llama.cpp, Strata and DwarfStar**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy. No orchestration plugin, cloud inference, model download, shell-command API, or frontend build chain.
 
@@ -13,11 +22,25 @@ A small Linux control plane for **llama.cpp, Strata and DwarfStar**. Plain HTML/
 - Separate control and inference credentials. No credentials, argv or filesystem paths in the public catalog.
 - Unknown counters remain null. RAM pressure is total minus available, **not model RSS**. Unified GPU memory counters may overlap RAM.
 
+## Host versus client
+
+- **Inference host:** Linux; runs IGM, the engines and local weights. Configure static launch commands, LAN restrictions and optional boot/recovery services here.
+- **Client machine:** Windows, macOS or Linux; needs only an OpenAI-compatible client or HTTP-capable agent. All configured models share `http://GATEWAY_HOST:9000/v1` and the inference credential.
+- **Trusted controller:** calls `http://GATEWAY_HOST:9000/api/...` with the control credential to discover, select, load and unload models. Ordinary workers should receive only the inference key.
+
+`/` is the dashboard. `/v1` is an **API base URL, not a web page**; a browser GET can return 404. Test `/v1/models` with a Bearer header instead. Registering a model in a client does not load it; load through the dashboard or controller first. Exactly one inference request is admitted at a time, with no invisible queue.
+
+For a walkthrough, Windows credentials, a smoke test and status-code troubleshooting, see [client setup](docs/clients.md). For multiple agents, see [orchestration](docs/orchestration.md). Environment variables are a credential convention, not an automatic integration.
+
 ## Install
+
+Clone this repository and enter it before running the commands below, or install a published wheel with `pip install PATH_TO_WHEEL` and obtain the example configuration separately. The editable installation below includes development tools; use `pip install .` for a source-based runtime installation without those tools.
 
 Requires Linux with pidfd support, Python 3.11+, and independently installed engines/weights.
 
 ```sh
+git clone https://github.com/vkotios/inference-gateway-manager.git
+cd inference-gateway-manager
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 cp examples/config.example.json config.local.json
@@ -72,6 +95,12 @@ llama.cpp and Strata use native `/slots` in addition to tracked requests. DwarfS
 ## Clients
 
 See [client configuration](docs/clients.md). The stable base URL is `http://GATEWAY_IP:9000/v1`; client credentials use the **inference** key, not the control key.
+
+## Agent skill and branding
+
+[`skills/inference-gateway-manager/SKILL.md`](skills/inference-gateway-manager/SKILL.md) is a portable operating procedure for HTTP-capable AI agents. Install it using your agent harness's documented skill mechanism; merely cloning the repository does not load it. It does not implement orchestration, grant permissions or enforce a distributed lock.
+
+The Coral/Bone Circuit Relay mark retains a faded third input to suggest expandability, not measured runtime status. Dark/light/monochrome SVGs, a favicon and a social-preview image are included; see [brand assets](docs/branding.md). GitHub's custom social preview requires a separate repository-settings upload.
 
 ## Development
 
