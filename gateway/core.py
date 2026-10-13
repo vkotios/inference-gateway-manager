@@ -98,7 +98,7 @@ class Manager:
                 continue
         return found
 
-    def capture_owned(self):
+    def capture_owned(self, native_candidates=None):
         if self.process is not None:
             item = identity(self.process.pid) if self.process.poll() is None else None
             if item:
@@ -115,7 +115,10 @@ class Manager:
             # Container exec may detach from both ancestry and session: its argv
             # must explicitly forward our unguessable per-launch environment tag.
             if self.launch_id:
-                for candidate in self.native_processes():
+                candidates = (
+                    self.native_processes() if native_candidates is None else native_candidates
+                )
+                for candidate in candidates:
                     try:
                         env = psutil.Process(candidate[0]).environ()
                         if (
@@ -342,8 +345,11 @@ class Manager:
                 while time.monotonic() < deadline:
                     if self.process.poll() is not None:
                         raise RuntimeError("Backend exited while loading; inspect local engine log")
-                    self.capture_owned()
-                    if any(p not in self.owned for p in self.native_processes()):
+                    # Validate ownership against the exact conflict snapshot:
+                    # a launched child can appear after an earlier enumeration.
+                    native = self.native_processes()
+                    self.capture_owned(native)
+                    if any(p not in self.owned for p in native):
                         raise RuntimeError("Unmanaged native engine appeared during startup")
                     try:
                         r = await self.http.get(
