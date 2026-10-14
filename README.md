@@ -9,7 +9,7 @@
 
 [Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md)
 
-A small Linux control plane for **llama.cpp, Strata and DwarfStar**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy. No orchestration plugin, cloud inference, model download, shell-command API, or frontend build chain.
+A small Linux control plane for **llama.cpp, Strata, Kyojin and DwarfStar**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy. No orchestration plugin, cloud inference, model download, shell-command API, or frontend build chain.
 
 ## What it does
 
@@ -54,6 +54,10 @@ set +a
 
 Open the configured address and use the control key from your private credential file. Keys are held in browser memory only, not localStorage. `init-keys` refuses to overwrite credentials. All `*.local.json`, `.local/`, `.env*`, logs and weights stay out of Git. Run one manager process/worker. Do not keep independent engine autostart services enabled alongside it.
 
+## Kyojin
+
+The [example configuration](examples/config.example.json) exposes four engine options. The API catalog and dashboard populate from configuration; no hardcoded UI adapter is required. For Kyojin launch details, ROCm runtime requirements, model IDs and acceptance steps, see [Kyojin integration](docs/kyojin.md). Updating the source example does not update an installed gateway's private configuration or reload its process.
+
 ## LAN security
 
 Defaults bind loopback. For LAN use bind **the specific private interface address**, add that host to `allowed_hosts`, and its subnet to `allowed_networks`. Keep every native engine loopback-only and use the gateway for inference. No reverse-proxy trust, wildcard CORS or arbitrary command execution is enabled.
@@ -90,7 +94,7 @@ Authenticate `/api/*` with the control credential using the `Authorization` head
 
 Add `X-Client-Name` to label requests. Model IDs must match the currently loaded gateway model. Selecting a model in a coding client's picker **does not automatically switch the engine**. A future orchestration plugin should call control APIs first. HTTP 409 means busy/invalid lifecycle (including unknown native occupancy on a non-force stop); inference uses 503 for unknown occupancy, and startup or shutdown failures also use 503; 401/403 means credential/role rejection. Startup may take several minutes; `/api/status` remains available while loading. A force-cancelled loader receives 409 and unload retains the selected engine without a startup-error message. Inference JSON must contain finite numbers and at most 128 nesting levels (invalid payloads return 400).
 
-llama.cpp and Strata use native `/slots` in addition to tracked requests. DwarfStar currently uses `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
+llama.cpp, Strata and Kyojin use native `/slots` in addition to tracked requests. DwarfStar currently uses `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
 
 ## Clients
 
