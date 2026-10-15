@@ -20,6 +20,15 @@
       "argv_contains": "serve.server"
     },
     {
+      "argv_contains": "tools/qwen/serve.py"
+    },
+    {
+      "argv_contains": "tools/glm/serve.py"
+    },
+    {
+      "argv_contains": "tools/mimo/serve.py"
+    },
+    {
       "exe": "ds4-server"
     }
   ],
@@ -60,6 +69,48 @@
           "base_url": "http://127.0.0.1:8081",
           "context": 262144,
           "upstream_model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
+        }
+      }
+    },
+    "kyojin": {
+      "label": "Kyojin",
+      "models": {
+        "qwen3.8-flash-next-kyojin": {
+          "argv": [
+            "/opt/kyojin/.venv/bin/python",
+            "-u",
+            "/opt/kyojin/tools/qwen/serve.py",
+            "--model",
+            "/opt/models/qwen3.8-flash-next-exl3",
+            "--model-id",
+            "qwen3.8-flash-next-kyojin",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8082",
+            "--ctx",
+            "32768",
+            "--cache-bits",
+            "8",
+            "--draft-policy",
+            "mtp",
+            "--ndt",
+            "4",
+            "--sessions",
+            "1",
+            "--no-vision",
+            "--slot-save-path",
+            "/var/lib/inference-gateway-manager/kyojin-slots"
+          ],
+          "cwd": "/opt/kyojin",
+          "env": {
+            "PYTHONPATH": "/opt/kyojin",
+            "EXL3_ROOT": "/opt/kyojin"
+          },
+          "base_url": "http://127.0.0.1:8082",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots"
         }
       }
     },
