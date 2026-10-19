@@ -14,7 +14,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/slots" and Handler.busy_until is not None:
-            busy = not Path(Handler.busy_until).exists()
+            busy = Path(Handler.busy_until).exists()
             value = [{"id": 0, "is_processing": busy, "n_ctx": 4096}]
         elif self.path == "/slots":
             value = [{"id": 0, "is_processing": False, "n_ctx": 4096}]

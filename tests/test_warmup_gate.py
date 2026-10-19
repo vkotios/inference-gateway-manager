@@ -14,8 +14,7 @@ def warmup_config(tmp_path):
     spec = cfg["engines"]["one"]["models"]["fixture"]
     marker = tmp_path / "warmup-busy"
     marker.touch()
-    spec["argv"] = spec["argv"][:2] + [spec["argv"][2], str(marker)]
-    spec["base_url"] = spec["base_url"]
+    spec["argv"] = spec["argv"] + [str(marker)]
     cfg["warmup_timeout"] = 2
     return cfg, marker
 
