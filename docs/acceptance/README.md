@@ -17,4 +17,4 @@ Actual Windows acceptance remains pending. The current MCP controls models; the
 coding client's terminal launches OpenCode. A dedicated MCP session-launch tool
 is not part of this package.
 
-Package SHA-256: `ff598bb8ffedb2f6ac90e9db1f504861031a5bad73583d964335cef6a8248283`
+Package SHA-256: `d65dbe8db5e92db89e04704009f728ce9097d3f139e2b3279026763fd0604d0e`

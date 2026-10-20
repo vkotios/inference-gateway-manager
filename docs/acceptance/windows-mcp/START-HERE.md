@@ -79,6 +79,12 @@ Continue after it prints `MCP adapter installed`.
 
 ## 3. Enter the API keys privately
 
+**Skip this step if `IGM_CONTROL_KEY` and `IGM_INFERENCE_KEY` are already set as
+Windows user environment variables with the gateway's existing keys. Keep those
+keys; you do not need to replace them for this test.** Variables set only for a
+single terminal session may not reach desktop apps; the shared launcher reads
+Windows user entries first, then its process environment.
+
 Run this block and paste each API key at its hidden prompt. The launcher reads these
 Windows user-environment entries for both desktop and CLI clients. This storage is
 not an encrypted vault; programs running as your Windows account can read it.
@@ -121,6 +127,12 @@ must name that launcher. Preserve the JSON double backslashes in the Claude temp
 Neither configuration needs an API-key value.
 
 ## 5. Connect the clients you use
+
+The [command-based registration guide](https://github.com/vkotios/inference-gateway-manager/blob/codex/gateway-controls/docs/mcp-registration.md)
+offers CLI registration for Codex desktop/native CLI and Claude Code. The manual
+configuration below remains valid, including Claude Desktop chat. Already working
+registrations do not need to be repeated. MCP registration does not install the
+companion orchestration skill; see that guide for separate skill installation.
 
 ### Codex desktop and native Windows CLI
 

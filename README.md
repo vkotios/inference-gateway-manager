@@ -103,10 +103,17 @@ llama.cpp, Strata, Kyojin and Gufo use native `/slots` in addition to tracked re
 
 See [client configuration](docs/clients.md). The stable base URL is `http://GATEWAY_IP:9000/v1`; client credentials use the **inference** key, not the control key.
 
-## Agent skill and branding
+## MCP registration and agent guidance
 
-[`skills/inference-gateway-manager/SKILL.md`](skills/inference-gateway-manager/SKILL.md) is a portable operating procedure for HTTP-capable AI agents. Install it using your agent harness's documented skill mechanism; merely cloning the repository does not load it. It does not implement orchestration, grant permissions or enforce a distributed lock.
+Run the MCP adapter on the **client computer** that runs Claude or Codex; the gateway and model files stay on the Linux inference host. Replace `GATEWAY_HOST` with the local network IP of the computer running the gateway. Keep existing `IGM_CONTROL_KEY` and `IGM_INFERENCE_KEY` values; registration does not require new keys.
 
+For Windows, use the [single setup package and walkthrough](docs/acceptance/README.md). [Command-based registration](docs/mcp-registration.md) avoids manual configuration for Codex desktop/native CLI and Claude Code. Claude Desktop chat uses its own configuration file; registering through Claude Code alone does not configure that chat surface. An installer that safely merges every client's configuration is not included.
+
+The [agent skill](skills/inference-gateway-manager/SKILL.md) remains useful: **MCP supplies tools; the skill supplies the operating procedure.** It covers model selection, readiness checks, context planning and handing a coding task to OpenCode. The skill is in this repository, not in the Python wheel or the Windows acceptance ZIP, and MCP registration does not install it. See [skill installation](docs/mcp-registration.md#install-the-companion-skill) for Claude Code and Codex.
+
+The [controller guide](docs/orchestration.md) documents the contract and coordination rules. Neither it nor the skill implements a scheduler, distributed lock or permission grant. `gateway_delegate` performs one text inference request; the parent coding client's terminal launches actual OpenCode sessions.
+
+Before launching a worker, use the [context sizing procedure](skills/inference-gateway-manager/references/context-sizing.md): estimate the working set through the next milestone, reserve generation and growth space, choose a client window within the effective backend capacity, then adjust from measured usage and compactions. A 64k client can use a warm 256k backend without reloading. A smaller declared window alone does not guarantee faster completion; repeated compaction can make the task slower.
 
 ## Development
 

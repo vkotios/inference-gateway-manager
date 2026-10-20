@@ -21,8 +21,10 @@ def test_new_documentation_links_resolve():
         ROOT / "README.md",
         ROOT / "docs/clients.md",
         ROOT / "docs/orchestration.md",
+        ROOT / "docs/mcp-registration.md",
         ROOT / "docs/branding.md",
         ROOT / "skills/inference-gateway-manager/SKILL.md",
+        ROOT / "skills/inference-gateway-manager/references/context-sizing.md",
     ]
     for path in paths:
         content = path.read_text()

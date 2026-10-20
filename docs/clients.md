@@ -4,6 +4,12 @@ Load the model through the dashboard/control API before selecting it in a client
 
 See [model controls and remote MCP](features.md) for context/reasoning selection, Hermes/OpenCode configuration-fragment export, and installation of the optional stdio controller on a client machine. A client's smaller conversation budget does not resize the loaded engine; changing engine capacity requires an explicit reload.
 
+For Claude/Codex command-based MCP registration and companion skill installation,
+see [registration](mcp-registration.md). Before launching a worker, follow the
+[context sizing procedure](../skills/inference-gateway-manager/references/context-sizing.md)
+to budget instructions, source, task growth and generation within effective backend
+capacity. Track early compactions and task completion time to refine that estimate.
+
 ## Generic OpenAI-compatible client
 
 | Setting | Value |
