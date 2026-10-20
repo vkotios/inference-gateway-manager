@@ -52,6 +52,8 @@ async def test_gufo_fixture_native_slots_and_raw_stream(tmp_path):
         base_url=f"http://127.0.0.1:{port}",
     )
     cfg.update(allowed_hosts=["testserver"], startup_timeout=5)
+    # This gateway owns only the disposable fixture, not engines running on the host.
+    cfg["native_matchers"] = [{"argv_contains": str(tmp_path)}]
     app = create_app(cfg, "a" * 32, "b" * 32, tmp_path)
     try:
         async with httpx.AsyncClient(

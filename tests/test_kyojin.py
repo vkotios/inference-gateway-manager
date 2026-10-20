@@ -24,6 +24,7 @@ def example_config():
 async def test_four_engine_catalog_includes_kyojin_without_private_launch_details(tmp_path):
     cfg = example_config()
     cfg["allowed_hosts"] = ["testserver"]
+    cfg["native_matchers"] = [{"argv_contains": str(tmp_path)}]
     app = create_app(cfg, "a" * 32, "b" * 32, tmp_path)
     try:
         async with httpx.AsyncClient(
@@ -99,7 +100,9 @@ async def test_kyojin_configured_lifecycle_streams_and_verifies_exit(tmp_path):
         base_url=f"http://127.0.0.1:{port}",
     )
     cfg.update(allowed_hosts=["testserver"], startup_timeout=5)
-    cfg["native_matchers"].append({"argv_contains": str(tmp_path)})
+    # Scope this lifecycle fixture independently of engines running on the host.
+    # The dedicated unmanaged-server test above retains the production matchers.
+    cfg["native_matchers"] = [{"argv_contains": str(tmp_path)}]
     app = create_app(cfg, "a" * 32, "b" * 32, tmp_path)
     process = None
     try:
