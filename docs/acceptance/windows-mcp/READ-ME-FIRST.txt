@@ -1,9 +1,0 @@
-Windows add-on for the existing remote-check.zip
-
-Keep the ZIP you already transferred. Extract these files alongside its original wheel and configuration fragments; open WINDOWS.md.
-
-The wheel and original MCP probe are unchanged. These additions supply Windows setup instructions, one shared launcher, Codex/Claude templates and the real OpenCode-session acceptance prompt. No API keys, passwords, state, logs or backups are included.
-
-Use your own gateway credentials privately. Actual Windows and remote-host acceptance remains pending. The MCP controls models; a coding client with terminal access launches OpenCode.
-
-Replace GATEWAY_HOST with your gateway host locally. Public files intentionally contain no actual network address or deployment paths.
