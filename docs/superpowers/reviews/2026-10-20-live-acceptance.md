@@ -39,6 +39,14 @@ quality measurements. Private evidence and backups are excluded from Git.
 | Installed Hermes | Generated 65,536 client configuration completed a short task while backend capacity remained 131,072 with unchanged process/selection. An isolated data root preserved existing profiles. |
 | Regression suite | 194 tests passed on Python 3.12 after the matcher correction; Ruff lint/format and whitespace checks passed. |
 
+> **Superseded for Gufo (2026-10-20, later the same day).** This record describes the first
+> acceptance, which ran Gufo from the upstream runtime container. IGM now manages a
+> **natively installed** Gufo with no container layer; see
+> [Native Gufo on the gateway host](../../gufo-native.md). The same lifecycle was re-verified
+> with the native binary under an isolated gateway: load with native `/slots` context readback,
+> a chat through the gateway, unload (no remaining process, engine port released), and engine
+> exit when the gateway is terminated.
+
 Gufo used upstream's official runtime image, pinned to
 `ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:51be93845170ce3ce441c7399b5b2eba942baf7f3e6c9a4a3333fccecc27d190`.
 It reports `0.19.0 (7b27845)`, matching the reviewed upstream source revision. The

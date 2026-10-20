@@ -628,6 +628,105 @@
               }
             }
           }
+        },
+        "dflash2-gguf": {
+          "argv": [
+            "/opt/gufo/bin/gufo",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8083",
+            "--sessions",
+            "1",
+            "llm",
+            "--model",
+            "{path}",
+            "--served-model-name",
+            "{model}",
+            "--context",
+            "{context}",
+            "--mmproj",
+            "{artifact.mmproj}",
+            "--speculative",
+            "dflash2",
+            "--dflash-model",
+            "{artifact.draft}"
+          ],
+          "base_url": "http://127.0.0.1:8083",
+          "context": 32768,
+          "ready_path": "/ready",
+          "probe": "slots",
+          "format": "gguf",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "label": "Qwen3.8 27B GGUF + vision projector + DFlash2 draft",
+          "supported_architectures": [
+            "qwen35"
+          ],
+          "reasoning_modes": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "reasoning_change": "request",
+          "reasoning_defaults": {
+            "on": {
+              "/v1/chat/completions": {
+                "chat_template_kwargs": {
+                  "enable_thinking": true
+                }
+              },
+              "/v1/responses": {
+                "reasoning": {
+                  "effort": "medium"
+                }
+              },
+              "/v1/messages": {
+                "thinking": {
+                  "type": "enabled"
+                }
+              }
+            },
+            "off": {
+              "/v1/chat/completions": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              },
+              "/v1/responses": {
+                "reasoning": {
+                  "effort": "none"
+                }
+              },
+              "/v1/messages": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          },
+          "artifacts": {
+            "mmproj": {
+              "kind": "file",
+              "format": "gguf"
+            },
+            "draft": {
+              "kind": "file",
+              "format": "gguf"
+            }
+          }
         }
       }
     }
