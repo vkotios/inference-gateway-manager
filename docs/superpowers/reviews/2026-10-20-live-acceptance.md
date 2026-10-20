@@ -60,16 +60,17 @@ The first isolated Hermes invocation also used an unsupported `none` toolset nam
 exited before inference. Correcting only the test invocation to its installed valid
 `context_engine` toolset produced a successful completion; no gateway fix was needed.
 
-## Remaining acceptance and deployment gates
+## Completed acceptance and remaining deployment gate
 
 - Operator verifies remembered login in their own normal browser with a password they
   set privately. Automated Chromium checks have passed.
-- A physically separate LAN host installs the wheel with the MCP extra and exercises
-  discovery, explicit load, bounded delegation and unload in its actual coding harness.
-  Local stdio-to-LAN-HTTP checks do not establish remote-host routing/firewall behavior.
-- The operator runs a small representative Hermes/OpenCode coding task from that host,
-  checking streaming/tool behavior and its chosen conversation budget.
-- CI passes again on the follow-up commit. Earlier green CI covered the original PR head.
+- A physically separate Windows LAN host completed actual Codex CLI/OpenCode acceptance:
+  MCP reached the gateway, the warm llama/qwen3-coder-30b backend stayed selected at
+  65,536 tokens, and OpenCode created the requested files using gateway inference.
+  Independent test execution passed. The recorded OpenCode sessions did not invoke a
+  terminal tool, so OpenCode-run test execution remains unverified as a separate
+  harness-capability item, not a gateway connectivity or inference failure.
+- CI must pass on the final PR head before merge.
 - Choose and validate final service deployment or rollback before resuming ordinary
   workloads. Starting the original service requires the candidate to release its port;
   the original service was already in an unloaded backend-error state before this window.

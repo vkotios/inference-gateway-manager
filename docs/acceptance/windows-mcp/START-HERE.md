@@ -191,8 +191,11 @@ If a load times out, inspect `gateway_status` before retrying: it may still be l
 Do not force interruption to get past a busy response.
 
 Report client versions, selected models/settings, OpenCode session IDs, test results
-and sanitized failures. Actual Windows acceptance remains pending until these checks
-run on your PC.
+and sanitized failures. Windows acceptance completed on 2026-10-20: Codex CLI on
+Windows reached the LAN gateway through MCP, selected the loaded model, and OpenCode
+created the requested files using gateway inference. Independent test execution
+passed. That OpenCode session did not invoke its terminal tool, so OpenCode-run test
+execution remains a separate harness-capability check rather than a gateway blocker.
 
 ## Reference documentation
 

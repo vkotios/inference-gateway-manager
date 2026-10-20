@@ -13,8 +13,11 @@ deployment paths, model files, state, logs or backups. Replace GATEWAY_HOST with
 local network IP of the computer running the gateway. Enter credentials privately
 as described in the guide.
 
-Actual Windows acceptance remains pending. The current MCP controls models; the
-coding client's terminal launches OpenCode. A dedicated MCP session-launch tool
-is not part of this package.
+Windows acceptance completed on 2026-10-20: the Windows Codex CLI reached the LAN
+gateway through MCP and OpenCode created files using gateway inference. Independent
+test execution passed. The OpenCode session did not invoke its terminal tool, so
+OpenCode-run test execution remains a separate harness-capability check. The current
+MCP controls models; the coding client's terminal launches OpenCode. A dedicated MCP
+session-launch tool is not part of this package.
 
-Package SHA-256: `d65dbe8db5e92db89e04704009f728ce9097d3f139e2b3279026763fd0604d0e`
+Package SHA-256: `27695bd24334333692395091466bb11b9443e89171366812ff0669dd3f8f4467`
