@@ -218,6 +218,10 @@ Install Gufo separately using its [upstream instructions](https://github.com/guf
 Replace placeholder executable/model paths in the example; do not replace an existing
 private deployment configuration with the whole example. Supported architectures and
 weight formats follow the installed Gufo release, not every GGUF accepted by llama.cpp.
+The example matches both `gufo` and the `.gufo-wrapped` executable used by upstream's
+Nix package and official runtime container. Preserve both native matchers when adapting
+the launch command. Container launches must forward `IGM_ENGINE_RUN_ID` to the engine
+so the gateway can verify ownership even when the container process is reparented.
 Speculative drafts, projectors and their compatibility remain explicit optional artifacts.
 The initial integration covers text, streaming, and client-managed tool-call workflows.
 It does not add Gufo's audio, image-generation or video APIs to IGM.

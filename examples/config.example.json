@@ -35,6 +35,9 @@
       "exe": "gufo"
     },
     {
+      "exe": ".gufo-wrapped"
+    },
+    {
       "exe": "gufo-server"
     }
   ],
