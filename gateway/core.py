@@ -1,6 +1,8 @@
 """Single-engine lifecycle with kernel PID identity guards (Linux only)."""
 
 import asyncio
+import copy
+import json
 import os
 import secrets
 import signal
@@ -11,6 +13,8 @@ from pathlib import Path
 import httpx
 import psutil
 from fastapi import HTTPException
+
+from .settings import select
 
 
 def identity(pid):
@@ -62,6 +66,11 @@ class Manager:
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.engine = None
+        self.launch_config_path = None
+        self.active_spec = None
+        self.selected_settings = None
+        self.active_settings = None
+        self.selection_id = secrets.token_hex(24)
         self.model = None
         self.phase = "unloaded"
         self.process = None
@@ -149,18 +158,35 @@ class Manager:
                         continue
 
     def spec(self):
-        return self.config["engines"][self.engine]["models"][self.model]
+        return self.active_spec or self.config["engines"][self.engine]["models"][self.model]
+
+    def read_context(self, slots):
+        if self.active_settings is None or not isinstance(slots, list) or not slots:
+            return
+        contexts = [slot.get("n_ctx") for slot in slots if isinstance(slot, dict)]
+        if len(contexts) == len(slots) and all(type(n) is int and n > 0 for n in contexts):
+            self.active_settings["context"] = min(contexts)
+            self.active_settings["context_source"] = "native_slots"
 
     async def native_busy(self):
         if not self.model or self.phase == "unloaded":
             return False
         spec = self.spec()
+        generation = (self.engine, self.model, self.launch_id, self.selection_id)
+        settings = self.active_settings
         if spec.get("probe", "slots") != "slots":
             return None
         try:
             r = await self.http.get(spec["base_url"] + "/slots", timeout=2)
             r.raise_for_status()
             slots = r.json()
+            # Dashboard probes run without the lifecycle lock. A response from an
+            # old launch must not supply occupancy or context for its replacement.
+            if generation != (self.engine, self.model, self.launch_id, self.selection_id) or (
+                settings is not self.active_settings
+            ):
+                return None
+            self.read_context(slots)
             if (
                 not isinstance(slots, list)
                 or not slots
@@ -177,9 +203,16 @@ class Manager:
             self.last_error = "Backend exited; reload using control API"
 
     def reset_loaded(self):
+        if self.launch_config_path is not None:
+            self.launch_config_path.unlink(missing_ok=True)
+            self.launch_config_path = None
         self.process = None
         self.owned.clear()
         self.model = None
+        self.active_spec = None
+        self.selected_settings = None
+        self.active_settings = None
+        self.selection_id = secrets.token_hex(24)
         self.launch_id = None
         self.last_error = None
         self.phase = "selected" if self.engine else "unloaded"
@@ -263,6 +296,8 @@ class Manager:
                     pass
 
     async def select_engine(self, engine, force=False):
+        if engine not in self.config["engines"]:
+            raise HTTPException(404, "Unknown engine")
         await self.interrupt_loading(force)
         async with self.lock:
             if engine not in self.config["engines"]:
@@ -281,11 +316,18 @@ class Manager:
         async with self.lock:
             await self._stop(force)
 
-    async def load_model(self, model, force=False):
+    async def load_model(self, model, force=False, *, engine=None, context=None, reasoning=None):
+        # Invalid force requests must never cancel another in-flight load.
+        self.prepare_model(model, engine, context, reasoning)
         await self.interrupt_loading(force)
         if self.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation already running")
-        task = asyncio.create_task(self._load_model(model, force))
+        operation = (
+            self._load_model(model, force)
+            if engine is None and context is None and reasoning is None
+            else self._load_model(model, force, engine=engine, context=context, reasoning=reasoning)
+        )
+        task = asyncio.create_task(operation)
         self.loading_task = task
         try:
             return await asyncio.shield(task)
@@ -302,19 +344,71 @@ class Manager:
             if self.loading_task is task:
                 self.loading_task = None
 
-    async def _load_model(self, model, force=False):
+    def prepare_model(self, model, engine=None, context=None, reasoning=None):
+        target_engine = engine if engine is not None else self.engine
+        if not target_engine:
+            raise HTTPException(409, "Select an engine before a model")
+        if target_engine not in self.config["engines"]:
+            raise HTTPException(404, "Unknown engine")
+        models = self.config["engines"][target_engine]["models"]
+        if model not in models or not models[model].get("enabled", True):
+            raise HTTPException(404, "Unknown or disabled model for selected engine")
+        # Validate and freeze the complete target before touching the current process.
+        # Registry/config mutation cannot redirect a running model's requests/probes.
+        source = (
+            self.active_spec
+            if target_engine == self.engine and model == self.model and self.active_spec is not None
+            else models[model]
+        )
+        # The frozen argv is already rendered; retain the administrator template
+        # for subsequent context changes while preserving the active snapshot.
+        source = copy.deepcopy(source)
+        if "_config_template" in source:
+            source["config_template"] = source.pop("_config_template")
+        if "_argv_template" in source:
+            source["argv"] = source.pop("_argv_template")
+        if target_engine == self.engine and model == self.model and self.selected_settings:
+            if context is None:
+                context = self.selected_settings["context"]
+            if reasoning is None:
+                reasoning = self.selected_settings["reasoning"]
+        spec, settings = select(source, context, reasoning)
+        spec["_argv_template"] = source["argv"]
+        return target_engine, spec, settings
+
+    async def _load_model(self, model, force=False, *, engine=None, context=None, reasoning=None):
         async with self.lock:
-            if not self.engine:
-                raise HTTPException(409, "Select an engine before a model")
-            models = self.config["engines"][self.engine]["models"]
-            if model not in models or not models[model].get("enabled", True):
-                raise HTTPException(404, "Unknown or disabled model for selected engine")
-            if model == self.model and self.phase == "ready" and self.process.poll() is None:
-                return
+            target_engine, spec, settings = self.prepare_model(model, engine, context, reasoning)
+            same_model = target_engine == self.engine and model == self.model
+            if (
+                same_model
+                and self.phase == "ready"
+                and self.process is not None
+                and self.process.poll() is None
+            ):
+                if settings == self.selected_settings:
+                    return
+                if (
+                    settings["context"] == self.selected_settings["context"]
+                    and spec.get("reasoning_change", "fixed") == "request"
+                ):
+                    self.selected_settings = settings
+                    self.active_settings["reasoning"] = settings["reasoning"]
+                    self.selection_id = secrets.token_hex(24)
+                    return
             await self._stop(force)
             if self.native_processes():
                 raise HTTPException(409, "Native engines still running; load refused")
-            spec = models[model]
+            self.engine = target_engine
+            self.active_spec = spec
+            self.selected_settings = settings
+            self.active_settings = {
+                "context": settings["context"],
+                "requested_context": settings["context"],
+                "context_source": "declared" if settings["context"] is not None else "unknown",
+                "reasoning": settings["reasoning"],
+            }
+            self.selection_id = secrets.token_hex(24)
             self.model = model
             self.phase = "loading"
             self.loading_task = asyncio.current_task()
@@ -322,9 +416,22 @@ class Manager:
             self.last_error = None
             self.launch_id = secrets.token_hex(24)
             try:
+                argv = spec["argv"]
+                if "config_template" in spec:
+                    self.launch_config_path = self.state_dir / f"launch-{self.launch_id}.json"
+                    fd = os.open(
+                        self.launch_config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                    )
+                    with os.fdopen(fd, "w") as generated:
+                        json.dump(spec["config_template"], generated, allow_nan=False)
+                        generated.flush()
+                        os.fsync(generated.fileno())
+                    argv = [
+                        arg.replace("{config_path}", str(self.launch_config_path)) for arg in argv
+                    ]
                 with (self.state_dir / "engine.log").open("ab") as log:
                     self.process = subprocess.Popen(
-                        [arg.replace("{launch_id}", self.launch_id) for arg in spec["argv"]],
+                        [arg.replace("{launch_id}", self.launch_id) for arg in argv],
                         cwd=spec.get("cwd"),
                         env={
                             **{
@@ -357,6 +464,7 @@ class Manager:
                         )
                         if r.is_success:
                             self.phase = "ready"
+                            await self.native_busy()
                             return
                     except httpx.HTTPError:
                         pass

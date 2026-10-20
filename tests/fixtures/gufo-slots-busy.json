@@ -1,0 +1,17 @@
+[
+  {
+    "id": 0,
+    "n_ctx": 4096,
+    "speculative": false,
+    "is_processing": true,
+    "id_task": 7,
+    "task_id": 7,
+    "state": 1,
+    "n_prompt_tokens": 32,
+    "n_prompt_tokens_cache": 16,
+    "n_prompt_tokens_processed": 16,
+    "prompt": "",
+    "next_token": [{"has_next_token": true, "has_new_line": false, "n_remain": 64, "n_decoded": 1}],
+    "model": "example-gufo"
+  }
+]

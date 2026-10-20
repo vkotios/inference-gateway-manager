@@ -2,6 +2,8 @@
 
 IGM provides lifecycle and inference APIs, not a model-selection policy, task scheduler, orchestration plugin or distributed lease. An HTTP-capable agent can manage it independently of the provider running that agent. Loading a skill or setting an environment variable alone does not implement this integration.
 
+The optional [remote stdio MCP adapter](features.md#mcp-on-another-machine) supplies discovery, explicit lifecycle control and bounded prompt delegation. It runs on the harness machine and does not execute returned tools or modify workspace files.
+
 ## Connections and authority
 
 Use `IGM_BASE_URL=http://GATEWAY_HOST:9000` as a gateway-root convention. Supply keys through a private secret store/process environment; [client setup](clients.md) covers Windows and Unix. Never print credentials or include them in prompts, URLs, Git, request logs or error reports.
@@ -16,16 +18,18 @@ Control authority includes force interruption and optionally administrator-enabl
 
 | Method | Route | Body / result |
 |---|---|---|
-| GET | `/api/engines` | `engines[]` with engine `id`, `label`, `models[]` containing `id`, `context`, `enabled` |
-| GET | `/api/status` | `selected_engine`, `loaded_model`, `phase`, `busy`, `native_busy`, `occupancy_source`, `active_requests`, `requests`, `error`, process identities |
+| GET | `/api/engines` | `engines[]` with engine `id`, `label`, `models[]` containing `id`, `context`, `enabled`, `context_limits`, `reasoning_modes`, `reasoning_change` |
+| GET | `/api/status` | `selected_engine`, `loaded_model`, `active_settings`, `selection_id`, `phase`, `busy`, `native_busy`, `occupancy_source`, `active_requests`, `requests`, `error`, process identities |
 | GET | `/api/telemetry` | Host measurements; unavailable counters remain null |
 | POST | `/api/engine` | `{"engine":"ENGINE_ID","force":false}`; select only, stop previous engine if switching |
-| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; load in selected engine, stop previous model if changing |
+| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; optional `engine`, `context`, `reasoning`; validate before stopping, context changes reload |
 | POST | `/api/unload` | `{"force":false}`; stop model/backend, retain selected engine |
 | GET | `/v1/models` | Enabled models with `owned_by`, `context_length`, loaded/unloaded `status` |
 | POST | `/v1/chat/completions` | OpenAI-compatible body; `model` must equal loaded model; SSE supported |
 
 `ENGINE_ID` and `MODEL_ID` are placeholders discovered from the catalog, not literal values to submit. Other inference transports are backend-dependent. Add `X-Client-Name` to inference requests for useful activity labels; never put secrets in that label.
+
+Compare the requested context/reasoning with `active_settings` before reusing a ready model. Include its `selection_id` as `X-IGM-Selection-ID` on inference to reject settings that changed before admission. This guard does not reserve the backend or replace orchestration ownership. See [settings and client budgets](features.md#context-and-reasoning) for capability declarations and explicit client reasoning precedence.
 
 ## Recommended controller procedure
 

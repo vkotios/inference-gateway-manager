@@ -9,7 +9,7 @@
 
 [Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md)
 
-A small Linux control plane for **llama.cpp, Strata, Kyojin and DwarfStar**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy. No orchestration plugin, cloud inference, model download, shell-command API, or frontend build chain.
+A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar and Gufo**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
 
 ## What it does
 
@@ -20,6 +20,7 @@ A small Linux control plane for **llama.cpp, Strata, Kyojin and DwarfStar**. Pla
 - Single admitted inference request; competitors get HTTP 409 rather than an invisible queue.
 - Tracks requests, processing state, CPU, RAM pressure and Linux DRM GPU utilization/memory/temperature.
 - Separate control and inference credentials. No credentials, argv or filesystem paths in the public catalog.
+- Validated context and reasoning defaults through the GUI/API, password login with remembered browsers, and registration from existing host model files. See [controls and remote MCP](docs/features.md).
 - Unknown counters remain null. RAM pressure is total minus available, **not model RSS**. Unified GPU memory counters may overlap RAM.
 
 ## Host versus client
@@ -52,11 +53,11 @@ set +a
 .venv/bin/python -m gateway serve --config config.local.json --state-dir .local/state
 ```
 
-Open the configured address and use the control key from your private credential file. Keys are held in browser memory only, not localStorage. `init-keys` refuses to overwrite credentials. All `*.local.json`, `.local/`, `.env*`, logs and weights stay out of Git. Run one manager process/worker. Do not keep independent engine autostart services enabled alongside it.
+Open the configured address and use the control key from your private credential file, or enable [password login](docs/features.md#password-login-and-remembered-browsers). Key login stays in browser memory; password login uses a revocable server-side session and can remember the browser. `init-keys` refuses to overwrite credentials. All `*.local.json`, `.local/`, `.env*`, logs and weights stay out of Git. Run one manager process/worker. Do not keep independent engine autostart services enabled alongside it.
 
 ## Kyojin
 
-The [example configuration](examples/config.example.json) exposes four engine options. The API catalog and dashboard populate from configuration; no hardcoded UI adapter is required. For Kyojin launch details, ROCm runtime requirements, model IDs and acceptance steps, see [Kyojin integration](docs/kyojin.md). Updating the source example does not update an installed gateway's private configuration or reload its process.
+The [example configuration](examples/config.example.json) exposes five engine options, including Gufo, and administrator-owned launch profiles for registration. The API catalog and dashboard populate from configuration. For Kyojin launch details, ROCm runtime requirements, model IDs and acceptance steps, see [Kyojin integration](docs/kyojin.md). Updating the source example does not update an installed gateway's private configuration or reload its process.
 
 ## LAN security
 
@@ -86,15 +87,17 @@ Authenticate `/api/*` with the control credential using the `Authorization` head
 | GET | `/api/engines` | Sanitized engine/model catalog |
 | GET | `/api/telemetry` | Real host counters |
 | POST | `/api/engine` | `{"engine":"strata","force":false}`; stops old engine; does not load a model |
-| POST | `/api/model` | `{"model":"qwen3.8-flash-next","force":false}`; loads selected engine's model |
+| POST | `/api/model` | `{"model":"qwen3.8-flash-next","force":false}`; optional `engine`, `context`, `reasoning` select validated settings |
+| GET | `/api/model-files` | Browse administrator-approved model roots (control only) |
+| POST | `/api/models/inspect`, `/api/models` | Inspect existing artifacts, then save a reviewed registration |
 | POST | `/api/unload` | `{"force":false}`; stops engine, retains engine selection |
 | GET | `/v1/models` | Enabled models and loaded/unloaded status |
 | POST | `/v1/chat/completions` | Transparent Chat Completions proxy, including raw SSE |
 | POST | `/v1/completions`, `/v1/responses`, `/v1/messages` | Passed through only if the selected backend implements them |
 
-Add `X-Client-Name` to label requests. Model IDs must match the currently loaded gateway model. Selecting a model in a coding client's picker **does not automatically switch the engine**. A future orchestration plugin should call control APIs first. HTTP 409 means busy/invalid lifecycle (including unknown native occupancy on a non-force stop); inference uses 503 for unknown occupancy, and startup or shutdown failures also use 503; 401/403 means credential/role rejection. Startup may take several minutes; `/api/status` remains available while loading. A force-cancelled loader receives 409 and unload retains the selected engine without a startup-error message. Inference JSON must contain finite numbers and at most 128 nesting levels (invalid payloads return 400).
+Add `X-Client-Name` to label requests. Model IDs must match the currently loaded gateway model. Selecting a model in a coding client's picker **does not automatically switch the engine**. The optional MCP controller or an HTTP controller calls control APIs first. Controllers can send `X-IGM-Selection-ID` from status/load to refuse stale settings. HTTP 409 means busy/invalid lifecycle (including unknown native occupancy on a non-force stop); inference uses 503 for unknown occupancy, and startup or shutdown failures also use 503; 401/403 means credential/role rejection. Startup may take several minutes; `/api/status` remains available while loading. A force-cancelled loader receives 409 and unload retains the selected engine without a startup-error message. Inference JSON must contain finite numbers and at most 128 nesting levels (invalid payloads return 400).
 
-llama.cpp, Strata and Kyojin use native `/slots` in addition to tracked requests. DwarfStar currently uses `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
+llama.cpp, Strata, Kyojin and Gufo use native `/slots` in addition to tracked requests. DwarfStar currently uses `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
 
 ## Clients
 
@@ -106,6 +109,13 @@ See [client configuration](docs/clients.md). The stable base URL is `http://GATE
 
 
 ## Development
+
+Install the development extra and Chromium once before running the browser workflows:
+
+```sh
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m playwright install chromium
+```
 
 ```sh
 .venv/bin/python -m pytest -q

@@ -3,14 +3,30 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - run: pip install -e '.[dev]'
+      - run: python -m playwright install --with-deps chromium
       - run: pytest -q
       - run: ruff check gateway tests
       - run: ruff format --check gateway tests
       - run: python -m build
       - run: node --check gateway/static/app.js
+  portable-client:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e '.[dev]'
+      - run: python -m pytest -q tests/test_mcp.py tests/test_remote_client.py

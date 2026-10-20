@@ -32,12 +32,16 @@ async def test_four_engine_catalog_includes_kyojin_without_private_launch_detail
             headers={"Authorization": "Bearer " + "a" * 32},
         ) as client:
             catalog = (await client.get("/api/engines")).json()["engines"]
-            assert {e["id"] for e in catalog} == {"llama", "strata", "kyojin", "dwarfstar"}
+            assert {e["id"] for e in catalog} == {"llama", "strata", "kyojin", "dwarfstar", "gufo"}
             kyojin = next(e for e in catalog if e["id"] == "kyojin")
             assert kyojin["label"] == "Kyojin"
-            assert kyojin["models"] == [
-                {"id": "qwen3.8-flash-next-kyojin", "context": 32768, "enabled": True}
-            ]
+            model = kyojin["models"][0]
+            assert {key: model[key] for key in ("id", "context", "enabled")} == {
+                "id": "qwen3.8-flash-next-kyojin",
+                "context": 32768,
+                "enabled": True,
+            }
+            assert model["context_limits"]["adjustable"] is True
             assert "/opt/" not in json.dumps(catalog)
             assert "argv" not in json.dumps(catalog)
             models = (await client.get("/v1/models")).json()["data"]
@@ -90,7 +94,7 @@ async def test_kyojin_configured_lifecycle_streams_and_verifies_exit(tmp_path):
     # Substitute only the unavailable external engine, retaining its probe/API config.
     fixture = str(Path(__file__).with_name("fixture_backend.py"))
     spec.update(
-        argv=[sys.executable, fixture, str(port), str(tmp_path)],
+        argv=[sys.executable, fixture, str(port), str(tmp_path), "{context}"],
         cwd=str(tmp_path),
         base_url=f"http://127.0.0.1:{port}",
     )
