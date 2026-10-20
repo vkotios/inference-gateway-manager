@@ -9,11 +9,12 @@ there is no archive merging step.
 PowerShell block that downloads and extracts the single package to the right folder.
 
 The public package contains no credentials, actual gateway address, private
-deployment paths, model files, state, logs or backups. Enter your gateway host and
-credentials locally as described in the guide.
+deployment paths, model files, state, logs or backups. Replace GATEWAY_HOST with the
+local network IP of the computer running the gateway. Enter credentials privately
+as described in the guide.
 
 Actual Windows acceptance remains pending. The current MCP controls models; the
 coding client's terminal launches OpenCode. A dedicated MCP session-launch tool
 is not part of this package.
 
-Package SHA-256: `d3f9a90699fbce1536099921717307c7ee5120e5fef2932a66313679cd9996a5`
+Package SHA-256: `ff598bb8ffedb2f6ac90e9db1f504861031a5bad73583d964335cef6a8248283`

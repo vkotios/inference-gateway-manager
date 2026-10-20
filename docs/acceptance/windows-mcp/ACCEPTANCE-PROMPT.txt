@@ -1,5 +1,7 @@
 Use the gateway MCP to select models, then launch real OpenCode sessions on this Windows machine using those models.
 
+Before running, replace GATEWAY_HOST in every URL with the local network IP address of the computer running the gateway service. Keep the URL scheme and the gateway's configured port.
+
 1. Confirm the igm MCP is connected, inspect gateway_catalog and gateway_status, and discover supported settings. Check that OpenCode is installed. Use a local session with terminal access.
 2. Select and load an enabled compatible coding model using gateway_load. Set backend context to 131072 only if advertised as supported. Use supported reasoning settings and never force interruption.
 3. Verify readiness, the exact loaded model, active context/reasoning, and selection_id. Generate or adapt a disposable OpenCode provider configuration for http://GATEWAY_HOST:9000/v1 using that exact model ID and a 65536 client budget, with a modest output limit. Preserve the selected backend throughout the session. Give OpenCode only IGM_INFERENCE_KEY, obtained privately from the current Windows user's environment; remove IGM_CONTROL_KEY from the child's environment. Never print credentials or put values in prompts/configuration files.

@@ -18,6 +18,10 @@ two API keys: control and inference. The Windows PC must be able to reach the ga
 **Your dashboard password is separate from these API keys.** Obtain the keys privately;
 they are not in any download. OpenCode must be installed for the final coding test.
 
+**Replace `GATEWAY_HOST` with the local network IP address of the computer running
+the gateway service.** In `http://GATEWAY_HOST:9000`, replace only `GATEWAY_HOST`
+with that IP address, keeping `http://` and the gateway's configured port.
+
 ## 1. Download and extract ONE package
 
 Open PowerShell on Windows and run this entire block. It downloads the complete ZIP
@@ -100,9 +104,9 @@ In the permanent `bundle` folder, edit and save:
 
 | File | Replacements |
 |---|---|
-| `codex-windows.toml` | YOUR_NAME → your Windows user-folder name; GATEWAY_HOST → your gateway host |
+| `codex-windows.toml` | YOUR_NAME → your Windows user-folder name; GATEWAY_HOST → the local network IP of the computer running the gateway |
 | `claude-desktop-windows.json` | The same two replacements |
-| `ACCEPTANCE-PROMPT.txt` | GATEWAY_HOST → your gateway host |
+| `ACCEPTANCE-PROMPT.txt` | GATEWAY_HOST → the local network IP of the computer running the gateway |
 
 The examples use port 9000. If your gateway uses another port, change that too.
 To see the exact executable and launcher paths for your account, run:
@@ -141,8 +145,9 @@ For the OpenCode task, use a local **Code** session with terminal access.
 
 ### Claude Code CLI
 
-Register the same launcher separately. Replace GATEWAY_HOST before running this
-whole block; change port 9000 too if your gateway uses another port:
+Register the same launcher separately. Replace GATEWAY_HOST with the local network
+IP of the computer running the gateway before running this whole block; change
+port 9000 too if your gateway uses another port:
 
 ```powershell
 $igmRoot = Join-Path $env:LOCALAPPDATA 'IGM'

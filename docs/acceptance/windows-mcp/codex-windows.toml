@@ -1,4 +1,5 @@
 # Merge this server into your existing configuration. Replace YOUR_NAME.
+# Replace GATEWAY_HOST with the local network IP of the computer running the gateway.
 [mcp_servers.igm]
 command = 'C:\Users\YOUR_NAME\AppData\Local\IGM\venv\Scripts\python.exe'
 args = ['C:\Users\YOUR_NAME\AppData\Local\IGM\bundle\run-gateway-mcp.py', '--url', 'http://GATEWAY_HOST:9000']
