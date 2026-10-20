@@ -83,22 +83,36 @@ def test_recovery_config_rejects_nonboolean_or_arbitrary_commands(options):
 def test_dashboard_recovery_confirmation_and_duplicate_guard():
     script = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
-const elements={};let allowed=false,calls=[];
-const ctx=vm.createContext({document:{getElementById:id=>elements[id]??=( {value:'',textContent:'',disabled:false} )},location:{origin:'http://testserver'},confirm:()=>allowed});
+const elements={};let calls=[],focused='';
+const element = id => elements[id] ??= {
+ value:'',textContent:'',disabled:false,open:false,
+ addEventListener(name,callback){this['on-'+name]=callback;},
+ showModal(){this.open=true;},
+ close(){this.open=false;this['on-close']?.();},
+ focus(){focused=id;}, append(){},replaceChildren(){},setAttribute(){},removeAttribute(){}
+};
+const ctx=vm.createContext({document:{getElementById:element},location:{origin:'http://testserver'}});
 vm.runInContext(fs.readFileSync('gateway/static/app.js','utf8'),ctx);
-vm.runInContext("key='synthetic'; recovery={restart_gateway:true,reboot_host:false,pending:false};",ctx);
+vm.runInContext("authenticated=true; key='synthetic'; recovery={restart_gateway:true,reboot_host:false,pending:false};",ctx);
 ctx.record=(path,body)=>calls.push({path,body});
 vm.runInContext('api=async(path,body)=>record(path,body)',ctx);
 (async()=>{
+ const cancelled = vm.runInContext("recover('restart-gateway')",ctx);
+ assert.equal(elements['confirm-dialog'].open,true);
+ assert.equal(elements['confirm-title'].textContent,'Restart gateway?');
+ assert.equal(focused,'confirm-cancel');
+ assert.equal(calls.length,0,'Recovery sent before confirmation');
  await vm.runInContext("recover('restart-gateway')",ctx);
- assert.equal(calls.length,0);
- allowed=true;
- await vm.runInContext("recover('restart-gateway')",ctx);
+ assert.equal(calls.length,0,'Duplicate confirmation bypassed dialog');
+ elements['confirm-cancel'].onclick(); await cancelled;
+ assert.equal(calls.length,0,'Cancel sent a recovery request');
+ const accepted = vm.runInContext("recover('restart-gateway')",ctx);
+ elements['confirm-accept'].onclick(); await accepted;
  assert.equal(calls.length,1);
  assert.equal(calls[0].path,'/api/recovery/restart-gateway');
  assert.equal(calls[0].body.confirmation,'restart-gateway');
  await vm.runInContext("recover('restart-gateway')",ctx);
- assert.equal(calls.length,1);
+ assert.equal(calls.length,1,'Pending recovery sent twice');
  assert.equal(elements['reboot-host'].disabled,true);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
@@ -111,8 +125,11 @@ def test_recovery_dashboard_has_distinct_confirmed_controls():
     script = Path("gateway/static/app.js").read_text()
     assert 'id="restart-gateway"' in markup
     assert 'id="reboot-host"' in markup
-    assert "confirmation:action" in script
-    assert "confirm(" in script
+    assert 'id="confirm-dialog"' in markup
+    assert 'aria-labelledby="confirm-title"' in markup
+    assert 'id="confirm-cancel"' in markup
+    assert 'id="confirm-accept"' in markup
+    assert "confirm(" not in script
 
 
 def test_privileged_helper_schedules_only_fixed_action(monkeypatch):

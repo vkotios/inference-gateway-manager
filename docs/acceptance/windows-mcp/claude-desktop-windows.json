@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "igm": {
+      "command": "C:\\Users\\YOUR_NAME\\AppData\\Local\\IGM\\venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\YOUR_NAME\\AppData\\Local\\IGM\\bundle\\run-gateway-mcp.py",
+        "--url",
+        "http://GATEWAY_HOST:9000"
+      ]
+    }
+  }
+}

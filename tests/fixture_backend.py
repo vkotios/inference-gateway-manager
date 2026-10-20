@@ -3,6 +3,7 @@
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -15,6 +16,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/slots"
             else {"status": "ok"}
         )
+        # Optional source-derived protocol snapshot for engine contract tests.
+        slots = Path(sys.argv[2]) / "slots.json" if len(sys.argv) > 2 else None
+        if self.path == "/slots" and slots is not None and slots.is_file():
+            value = json.loads(slots.read_text())
         body = json.dumps(value).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))

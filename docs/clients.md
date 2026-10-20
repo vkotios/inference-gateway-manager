@@ -2,6 +2,14 @@
 
 Load the model through the dashboard/control API before selecting it in a client. An inference request never implicitly starts or switches an engine. The inference host runs Linux; client machines can run Windows, macOS or Linux.
 
+See [model controls and remote MCP](features.md) for context/reasoning selection, Hermes/OpenCode configuration-fragment export, and installation of the optional stdio controller on a client machine. A client's smaller conversation budget does not resize the loaded engine; changing engine capacity requires an explicit reload.
+
+For Claude/Codex command-based MCP registration and companion skill installation,
+see [registration](mcp-registration.md). Before launching a worker, follow the
+[context sizing procedure](../skills/inference-gateway-manager/references/context-sizing.md)
+to budget instructions, source, task growth and generation within effective backend
+capacity. Track early compactions and task completion time to refine that estimate.
+
 ## Generic OpenAI-compatible client
 
 | Setting | Value |
@@ -18,6 +26,13 @@ The dashboard is `/`. `/v1` is not an interactive surface: a browser GET returni
 ## Credentials on the client machine
 
 IGM's host-side `init-keys` writes a private credential file at the operator-selected location (the README uses `.local/credentials.env`). Transfer only the needed value through a trusted channel; do not share the entire file with workers. Both keys use `Authorization: Bearer KEY`. The control key also permits inference but should not be used as an ordinary client's API key.
+
+Each initialization generates two different random keys; they are not common to all
+installations. They persist when the server keeps using the same credential file.
+The [server-to-client walkthrough](mcp-registration.md#obtain-the-server-connection-details)
+explains how the server owner obtains the existing values, identifies the correct
+LAN address and enters those details privately on the client. No automatic key or
+server discovery is provided.
 
 Suggested environment convention:
 
@@ -68,35 +83,39 @@ import os
 import urllib.error
 import urllib.request
 
-base = os.environ['IGM_BASE_URL'].rstrip('/')
-key = os.environ['IGM_INFERENCE_KEY']
+base = os.environ["IGM_BASE_URL"].rstrip("/")
+key = os.environ["IGM_INFERENCE_KEY"]
+
 
 def call(path, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     request = urllib.request.Request(
-        base + path, data=data,
-        headers={'Authorization': 'Bearer ' + key,
-                 'Content-Type': 'application/json'},
+        base + path,
+        data=data,
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        raise SystemExit(f'Gateway HTTP {error.code}; see troubleshooting.') from None
+        raise SystemExit(f"Gateway HTTP {error.code}; see troubleshooting.") from None
     except urllib.error.URLError:
-        raise SystemExit('Gateway connection failed; check address/network.') from None
+        raise SystemExit("Gateway connection failed; check address/network.") from None
 
-loaded = [m['id'] for m in call('/v1/models')['data']
-          if m.get('status') == 'loaded']
+
+loaded = [m["id"] for m in call("/v1/models")["data"] if m.get("status") == "loaded"]
 if len(loaded) != 1:
-    raise SystemExit('Load exactly one model through the dashboard/controller first.')
-result = call('/v1/chat/completions', {
-    'model': loaded[0],
-    'messages': [{'role': 'user', 'content': 'Reply with a short greeting.'}],
-    'max_tokens': 128,
-    'stream': False,
-})
-print(result['choices'][0]['message']['content'])
+    raise SystemExit("Load exactly one model through the dashboard/controller first.")
+result = call(
+    "/v1/chat/completions",
+    {
+        "model": loaded[0],
+        "messages": [{"role": "user", "content": "Reply with a short greeting."}],
+        "max_tokens": 128,
+        "stream": False,
+    },
+)
+print(result["choices"][0]["message"]["content"])
 ```
 
 The timeout and output length above are smoke-test choices, not model limits or lifecycle deadlines. A slow cold request may need a longer client timeout. Tool calls, streaming and coding-client endurance require separate tests per backend.

@@ -30,6 +30,15 @@
     },
     {
       "exe": "ds4-server"
+    },
+    {
+      "exe": "gufo"
+    },
+    {
+      "exe": ".gufo-wrapped"
+    },
+    {
+      "exe": "gufo-server"
     }
   ],
   "engines": {
@@ -46,10 +55,125 @@
             "8080",
             "--slots",
             "--ctx-size",
-            "32768"
+            "{context}"
           ],
           "base_url": "http://127.0.0.1:8080",
-          "context": 32768
+          "context": 32768,
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "gguf": {
+          "argv": [
+            "/opt/llama/llama-server",
+            "-m",
+            "{path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8080",
+            "--slots",
+            "--ctx-size",
+            "{context}",
+            "--alias",
+            "{model}"
+          ],
+          "base_url": "http://127.0.0.1:8080",
+          "context": 32768,
+          "format": "gguf",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        },
+        "hybrid-gguf": {
+          "argv": [
+            "/opt/llama/llama-server",
+            "-m",
+            "{path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8080",
+            "--slots",
+            "--ctx-size",
+            "{context}",
+            "--alias",
+            "{model}"
+          ],
+          "base_url": "http://127.0.0.1:8080",
+          "context": 32768,
+          "format": "gguf",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "reasoning_modes": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "reasoning_change": "request",
+          "reasoning_defaults": {
+            "on": {
+              "/v1/chat/completions": {
+                "chat_template_kwargs": {
+                  "enable_thinking": true
+                }
+              },
+              "/v1/responses": {
+                "reasoning": {
+                  "effort": "medium"
+                }
+              }
+            },
+            "off": {
+              "/v1/chat/completions": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              },
+              "/v1/responses": {
+                "reasoning": {
+                  "effort": "none"
+                }
+              }
+            }
+          },
+          "label": "Hybrid reasoning GGUF (administrator reviewed Qwen3.8 template)",
+          "supported_architectures": [
+            "qwen35"
+          ]
         }
       }
     },
@@ -63,12 +187,162 @@
             "--engine",
             "strata",
             "--config",
-            "/opt/strata/strata.local.json"
+            "{config_path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8081"
           ],
           "cwd": "/opt/strata",
           "base_url": "http://127.0.0.1:8081",
           "context": 262144,
-          "upstream_model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
+          "upstream_model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl",
+          "config_template": {
+            "exe": "/opt/strata/build/strata",
+            "cwd": "/opt/strata",
+            "args": [
+              "--pack",
+              "/opt/models/strata-pack",
+              "--native",
+              "/opt/models/qwen3.8-flash-next-00001-of-00004.gguf",
+              "--max-context",
+              "{context}"
+            ],
+            "tokenizer": "/opt/models/strata-pack/tokenizer",
+            "model_name": "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
+          },
+          "context_limits": {
+            "min": 4096,
+            "max": 262144,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072,
+              262144
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "native-gguf": {
+          "format": "native",
+          "argv": [
+            "/opt/strata/.venv/bin/python",
+            "-m",
+            "serve.server",
+            "--engine",
+            "strata",
+            "--config",
+            "{config_path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8081"
+          ],
+          "cwd": "/opt/strata",
+          "base_url": "http://127.0.0.1:8081",
+          "context": 32768,
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "artifacts": {
+            "tokenizer": {
+              "kind": "directory",
+              "required_files": [
+                "tokenizer.json"
+              ]
+            }
+          },
+          "config_template": {
+            "exe": "/opt/strata/build/strata",
+            "cwd": "/opt/strata",
+            "args": [
+              "--max-context",
+              "{context}",
+              "--native",
+              "{path}"
+            ],
+            "tokenizer": "{artifact.tokenizer}",
+            "model_name": "{model}"
+          }
+        },
+        "pack": {
+          "format": "strata",
+          "required_files": [
+            "dense.bin",
+            "index.txt",
+            "native_experts.txt",
+            "tokenizer/tokenizer.json"
+          ],
+          "argv": [
+            "/opt/strata/.venv/bin/python",
+            "-m",
+            "serve.server",
+            "--engine",
+            "strata",
+            "--config",
+            "{config_path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8081"
+          ],
+          "cwd": "/opt/strata",
+          "base_url": "http://127.0.0.1:8081",
+          "context": 32768,
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "artifacts": {
+            "native": {
+              "kind": "file",
+              "format": "gguf"
+            },
+            "tokenizer": {
+              "kind": "directory",
+              "required_files": [
+                "tokenizer.json"
+              ]
+            }
+          },
+          "config_template": {
+            "exe": "/opt/strata/build/strata",
+            "cwd": "/opt/strata",
+            "args": [
+              "--max-context",
+              "{context}",
+              "--pack",
+              "{path}",
+              "--native",
+              "{artifact.native}"
+            ],
+            "tokenizer": "{artifact.tokenizer}",
+            "model_name": "{model}"
+          }
         }
       }
     },
@@ -89,7 +363,7 @@
             "--port",
             "8082",
             "--ctx",
-            "32768",
+            "{context}",
             "--cache-bits",
             "8",
             "--draft-policy",
@@ -110,7 +384,69 @@
           "base_url": "http://127.0.0.1:8082",
           "context": 32768,
           "ready_path": "/health",
-          "probe": "slots"
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "qwen-exl3": {
+          "format": "kyojin",
+          "required_files": [
+            "config.json",
+            "tokenizer.json",
+            "chat_template.jinja"
+          ],
+          "argv": [
+            "/opt/kyojin/.venv/bin/python",
+            "-u",
+            "/opt/kyojin/tools/qwen/serve.py",
+            "--model",
+            "{path}",
+            "--model-id",
+            "{model}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8082",
+            "--ctx",
+            "{context}",
+            "--sessions",
+            "1",
+            "--no-vision"
+          ],
+          "cwd": "/opt/kyojin",
+          "base_url": "http://127.0.0.1:8082",
+          "context": 32768,
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "probe": "slots",
+          "env": {
+            "PYTHONPATH": "/opt/kyojin",
+            "EXL3_ROOT": "/opt/kyojin"
+          }
         }
       }
     },
@@ -126,14 +462,177 @@
             "--port",
             "8000",
             "--ctx",
-            "65536"
+            "{context}"
           ],
           "base_url": "http://127.0.0.1:8000",
           "context": 65536,
           "ready_path": "/v1/models",
-          "probe": "gateway_only"
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "gguf": {
+          "argv": [
+            "/opt/ds4/ds4-server",
+            "-m",
+            "{path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+            "--ctx",
+            "{context}"
+          ],
+          "base_url": "http://127.0.0.1:8000",
+          "context": 65536,
+          "ready_path": "/v1/models",
+          "probe": "gateway_only",
+          "format": "gguf",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      }
+    },
+    "gufo": {
+      "label": "Gufo",
+      "models": {
+        "example-gufo": {
+          "enabled": false,
+          "argv": [
+            "/opt/gufo/bin/gufo",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8083",
+            "--sessions",
+            "1",
+            "llm",
+            "--model",
+            "/opt/models/model.gguf",
+            "--served-model-name",
+            "example-gufo",
+            "--context",
+            "32768"
+          ],
+          "base_url": "http://127.0.0.1:8083",
+          "context": 32768,
+          "ready_path": "/ready",
+          "probe": "slots"
+        }
+      },
+      "profiles": {
+        "gguf": {
+          "argv": [
+            "/opt/gufo/bin/gufo",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8083",
+            "--sessions",
+            "1",
+            "llm",
+            "--model",
+            "{path}",
+            "--served-model-name",
+            "{model}",
+            "--context",
+            "{context}"
+          ],
+          "base_url": "http://127.0.0.1:8083",
+          "context": 32768,
+          "ready_path": "/ready",
+          "probe": "slots",
+          "format": "gguf",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "label": "Qwen3.8 27B GGUF",
+          "supported_architectures": [
+            "qwen35"
+          ],
+          "reasoning_modes": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "reasoning_change": "request",
+          "reasoning_defaults": {
+            "on": {
+              "/v1/chat/completions": {
+                "chat_template_kwargs": {
+                  "enable_thinking": true
+                }
+              },
+              "/v1/responses": {
+                "reasoning": {
+                  "effort": "medium"
+                }
+              },
+              "/v1/messages": {
+                "thinking": {
+                  "type": "enabled"
+                }
+              }
+            },
+            "off": {
+              "/v1/chat/completions": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              },
+              "/v1/responses": {
+                "reasoning": {
+                  "effort": "none"
+                }
+              },
+              "/v1/messages": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          }
         }
       }
     }
+  },
+  "model_roots": {
+    "models": "/opt/models"
   }
 }
