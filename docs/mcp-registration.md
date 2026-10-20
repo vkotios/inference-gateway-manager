@@ -4,6 +4,77 @@ Registration can use the clients' existing commands. This repository does not ye
 provide a single installer that merges all desktop/CLI configurations. Registering
 the MCP and installing the skill are separate operations; neither changes API keys.
 
+## Obtain the server connection details
+
+The server owner supplies three values to a trusted MCP controller: the gateway
+root URL, control key and inference key. Registration cannot infer these from a
+repository download or the client's own IP address. The dashboard currently has
+no key-reveal/pairing wizard, and the client does not automatically discover servers.
+
+### On the Linux AI server
+
+1. During first setup, the README runs:
+
+   ```sh
+   .venv/bin/python -m gateway init-keys --output .local/credentials.env
+   ```
+
+   This generates two independent random keys, writes `IGM_CONTROL_KEY` and
+   `IGM_INFERENCE_KEY` to an owner-only file (mode `0600`), and prints only the file
+   location. There are no built-in default keys. The server refuses identical keys.
+   The command refuses to overwrite an existing file. Do not rerun it to register
+   another client; reuse the existing deployment's keys.
+
+2. Open that file privately in a local editor on the server to copy the needed
+   values. For example, from the checkout used for the README installation:
+
+   ```sh
+   nano .local/credentials.env
+   ```
+
+   A service installation may use another credential file: check its configured
+   environment-file location. The running gateway uses keys supplied in its
+   environment; confirm you are reading the file that deployment actually loads.
+   Keep the file private. Share both values only with a trusted controller; an
+   inference-only worker needs just the inference key. Do not paste keys into chat.
+
+3. Find the server's network-interface addresses:
+
+   ```sh
+   ip -brief -4 address show scope global
+   ```
+
+   Choose the Ethernet/Wi-Fi address on the same LAN as the client. Multiple
+   addresses can include VPN/container networks; do not blindly pick the first.
+   Configure IGM's `host`, `allowed_hosts` and `allowed_networks` for that interface
+   as described in [LAN setup](../README.md#lan-security). Defaults bind loopback
+   and cannot serve another computer. `127.0.0.1` on the client means the client
+   itself; `0.0.0.0` is a bind address, not the address to enter on the client.
+
+4. Give the client the full root URL, `http://GATEWAY_HOST:9000`, replacing
+   `GATEWAY_HOST` with the chosen **server** LAN IP and using the configured port.
+   Do not add `/v1` for MCP; inference clients use that suffix separately. A stable
+   LAN hostname can also be used if it resolves and is allowed by the gateway.
+   Prefer a router DHCP reservation or stable DNS so the address does not change.
+
+The keys remain stable across restarts/updates when the same environment is used.
+They differ between independently initialized deployments. Replacing the server's
+keys requires updating its clients; changing the server IP requires updating their
+URLs unless a stable hostname handles it. Neither change happens on registration.
+
+### On the Windows client
+
+Use the existing [hidden API-key prompts](acceptance/windows-mcp/START-HERE.md#3-enter-the-api-keys-privately)
+once to paste the server's two values into Windows user environment variables.
+Skip that step if those variables already contain the correct keys. The shared
+launcher reads them when either desktop or CLI starts the MCP; key values are not
+stored in the client registration JSON/TOML or passed on command lines. Windows
+user environment variables are not an encrypted vault.
+
+The registration block below asks for the gateway URL in a normal terminal field
+(it is not secret). After registration, verify authenticated `gateway_catalog` and
+`gateway_status`. There is no GUI popup or automatic server/key discovery today.
+
 ## Windows: command-based registration
 
 First install the adapter and shared launcher using the [Windows walkthrough](acceptance/windows-mcp/START-HERE.md).
@@ -11,15 +82,17 @@ If your existing API keys are already Windows user environment variables, keep
 them. The launcher reads those values privately; do not pass key values on the
 command line. These commands run on the Windows client, not the gateway host.
 
-For a new `igm` registration, run the relevant command below in PowerShell. Replace
-`GATEWAY_HOST` with the **local network IP of the computer running the gateway**,
-and change port 9000 if necessary. Paths are derived from your Windows account:
+For a new `igm` registration, run the relevant command below in PowerShell. At the
+URL prompt, enter the full address obtained from the server owner above. Paths are
+derived from your Windows account:
 
 ```powershell
 $igmPython = Join-Path $env:LOCALAPPDATA 'IGM\venv\Scripts\python.exe'
 $igmLauncher = Join-Path $env:LOCALAPPDATA 'IGM\bundle\run-gateway-mcp.py'
-$igmUrl = 'http://GATEWAY_HOST:9000'
-if ($igmUrl -match 'GATEWAY_HOST') { throw 'Replace GATEWAY_HOST with the gateway computer LAN IP first' }
+$igmUrl = (Read-Host 'Gateway URL using the AI server LAN IP and configured port').Trim().TrimEnd('/')
+if ($igmUrl -notmatch '^https?://[^/\s]+$' -or $igmUrl -match 'GATEWAY_HOST') {
+    throw 'Enter the full gateway root URL with the actual server LAN IP; no /v1 suffix'
+}
 if (-not (Test-Path -LiteralPath $igmPython)) { throw 'Install the IGM adapter first' }
 if (-not (Test-Path -LiteralPath $igmLauncher)) { throw 'Install the shared launcher first' }
 
@@ -101,11 +174,15 @@ address merely because you installed this locally.
 
 ## What a future unified installer should do
 
-A single Windows setup command could validate the gateway URL, reuse existing
-private keys, register the installed clients, set Codex's loading timeout and copy
-the companion skill. It should back up configurations, update only `igm`, preserve
-other settings, and support repeat runs. Desktop chat JSON merging remains a
-separate step today; do not describe CLI registration as covering every surface.
+A single Windows setup command should ask for the full gateway URL, reuse existing
+private keys or request missing ones through hidden terminal prompts, and validate
+connectivity and both credential roles before claiming setup succeeded. It should
+register the installed clients, set Codex's loading timeout and copy the companion
+skill. Back up configurations, update only `igm`, preserve other settings, and
+support repeat runs. If server-side address detection is added, show interface
+candidates and ask the owner to choose when ambiguous; never assume the first IP.
+Desktop chat JSON merging remains a separate step today; do not describe CLI
+registration as covering every surface. This unified installer is not implemented.
 
 ## Client documentation
 

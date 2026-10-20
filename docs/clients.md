@@ -27,6 +27,13 @@ The dashboard is `/`. `/v1` is not an interactive surface: a browser GET returni
 
 IGM's host-side `init-keys` writes a private credential file at the operator-selected location (the README uses `.local/credentials.env`). Transfer only the needed value through a trusted channel; do not share the entire file with workers. Both keys use `Authorization: Bearer KEY`. The control key also permits inference but should not be used as an ordinary client's API key.
 
+Each initialization generates two different random keys; they are not common to all
+installations. They persist when the server keeps using the same credential file.
+The [server-to-client walkthrough](mcp-registration.md#obtain-the-server-connection-details)
+explains how the server owner obtains the existing values, identifies the correct
+LAN address and enters those details privately on the client. No automatic key or
+server discovery is provided.
+
 Suggested environment convention:
 
 | Variable | Consumer |

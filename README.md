@@ -55,6 +55,8 @@ set +a
 
 Open the configured address and use the control key from your private credential file, or enable [password login](docs/features.md#password-login-and-remembered-browsers). Key login stays in browser memory; password login uses a revocable server-side session and can remember the browser. `init-keys` refuses to overwrite credentials. All `*.local.json`, `.local/`, `.env*`, logs and weights stay out of Git. Run one manager process/worker. Do not keep independent engine autostart services enabled alongside it.
 
+`init-keys` generates **two different random keys for this installation**; they are not shared defaults. The file has owner-only permissions. Restarts reuse the same keys when you load that same file; cloning, installing or updating the package alone does not generate or rotate them. Open the private credential file locally on the server to obtain the values for your client. The dashboard password is separate. For finding the server's LAN address and entering the URL/keys on another computer, follow [server-to-client setup](docs/mcp-registration.md#obtain-the-server-connection-details).
+
 ## Kyojin
 
 The [example configuration](examples/config.example.json) exposes five engine options, including Gufo, and administrator-owned launch profiles for registration. The API catalog and dashboard populate from configuration. For Kyojin launch details, ROCm runtime requirements, model IDs and acceptance steps, see [Kyojin integration](docs/kyojin.md). Updating the source example does not update an installed gateway's private configuration or reload its process.
