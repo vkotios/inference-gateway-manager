@@ -207,3 +207,14 @@ async def test_startup_default_load_is_not_gated_by_a_held_lease(tmp_path):
         assert app.state.manager.phase == "ready"
         # Once startup is done the gate applies to later changes.
         assert app.state.manager.lease_guard is not None
+
+
+def test_dashboard_has_banner_and_break_control():
+    root = Path(__file__).resolve().parents[1] / "gateway/static"
+    page = (root / "index.html").read_text()
+    script = (root / "app.js").read_text()
+    assert 'id="maintenance"' in page and 'id="maintenance-break"' in page
+    assert 'api("/api/maintenance", undefined, "DELETE")' in script
+    assert "showMaintenance(s.maintenance)" in script
+    docs = Path(__file__).resolve().parents[1] / "docs/maintenance-lease.md"
+    assert "lease.json" in docs.read_text() and "status.json" in docs.read_text()

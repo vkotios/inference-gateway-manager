@@ -136,6 +136,26 @@ function chart(id, values, value) {
   const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
   line.setAttribute("points", values.map((v,i) => (i*300/59) + "," + (58-v*.54)).join(" ")); $(id).replaceChildren(line);
 }
+let leaseId = null, breaking = false;
+function showMaintenance(info) {
+  const lease = info?.enabled && info.lease?.held ? info.lease : null;
+  leaseId = lease?.id || null;
+  $("maintenance").hidden = !lease && !info?.error;
+  if (lease) {
+    const until = new Date(lease.expires_at * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    $("maintenance-text").textContent = `Model loads paused by ${lease.holder} until ${until}: ${lease.reason}`;
+  } else if (info?.error) $("maintenance-text").textContent = "Maintenance lease unavailable: " + info.error;
+  $("maintenance-break").hidden = !lease;
+  $("maintenance-break").disabled = !lease || !authenticated || breaking;
+}
+$("maintenance-break").onclick = async () => {
+  if (!authenticated || breaking || !leaseId) return;
+  if (!await askConfirmation("Break the maintenance lease?", "The job holding it is told to stop. Model loads resume immediately and the holder cannot take this lease back.", "Break lease")) return;
+  const epoch = generation; breaking = true; $("maintenance-break").disabled = true;
+  try { await api("/api/maintenance", undefined, "DELETE"); if (epoch === generation) notice("Maintenance lease broken."); }
+  catch (error) { if (epoch === generation) notice(error.message); }
+  finally { if (epoch === generation) { breaking = false; await poll(); } }
+};
 async function poll() {
   if (!authenticated || polling) return;
   const epoch = generation; polling = true;
@@ -161,6 +181,7 @@ async function poll() {
     chart("gpu-chart", history.gpu, gpu?.utilization_percent);
     $("cpu").textContent = t.cpu_percent == null ? "Unknown" : t.cpu_percent.toFixed(0) + "%";
     $("swap").textContent = "Swap used: " + gib(t.swap_used_bytes); $("updated").textContent = "UPDATED " + new Date().toLocaleTimeString();
+    showMaintenance(s.maintenance);
     if (s.error) notice(s.error);
     buttons();
   } catch (error) {

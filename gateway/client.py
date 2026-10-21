@@ -88,6 +88,7 @@ class GatewayClient:
                         401: "Check the API credential",
                         403: "Credential or access policy refused",
                         409: "Busy or selection changed; inspect status before retrying",
+                        423: "Model loads are paused by a maintenance lease; retry later",
                         422: "Invalid request settings",
                         503: "Backend unavailable; inspect status",
                     }
