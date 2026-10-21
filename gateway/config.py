@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .maintenance import validate_options
 from .settings import validate_capabilities
 
 
@@ -20,6 +21,8 @@ def validate(config):
         or any(type(value) is not bool for value in recovery.values())
     ):
         raise ValueError("recovery accepts only restart_gateway/reboot_host boolean options")
+    if "maintenance" in config:
+        validate_options(config["maintenance"])
     browser = config.get("browser_auth", {})
     if (
         not isinstance(browser, dict)
