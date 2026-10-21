@@ -152,8 +152,18 @@ def test_symlinked_directory_is_refused(tmp_path):
 def test_status_file_contents_mode_and_atomic_replace(tmp_path):
     m, d = make(tmp_path)
     put(d, lease_doc())
-    assert m.write_status({"phase": "ready", "loaded_model": "m", "active_requests": 2,
-                           "native_busy": False, "lifecycle_busy": False}) is True
+    assert (
+        m.write_status(
+            {
+                "phase": "ready",
+                "loaded_model": "m",
+                "active_requests": 2,
+                "native_busy": False,
+                "lifecycle_busy": False,
+            }
+        )
+        is True
+    )
     path = d / "status.json"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     status = json.loads(path.read_text())

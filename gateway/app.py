@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import ipaddress
 import json
+import logging
 import math
 import time
 import uuid
@@ -19,10 +20,13 @@ from pydantic import BaseModel, ConfigDict, StrictInt
 
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
 from .core import Manager, finish_cleanup
+from .maintenance import Maintenance
 from .registry import Registry
 from .settings import apply_reasoning, summary
 from .supervision import watchdog
 from .telemetry import telemetry
+
+log = logging.getLogger("gateway.app")
 
 
 def reject_constant(value):
@@ -98,6 +102,53 @@ def create_app(config, admin_key, inference_key, state_dir):
     if min(len(admin_key), len(inference_key)) < 32 or admin_key == inference_key:
         raise ValueError("Two different keys of at least 32 characters are required")
     manager = Manager(config, Path(state_dir))
+    maintenance = (
+        Maintenance(config["maintenance"], manager.state_dir) if "maintenance" in config else None
+    )
+
+    def lease_guard():
+        return maintenance.block_detail()
+
+    def enforce_lease():
+        blocked = maintenance.block_detail() if maintenance is not None else None
+        if blocked:
+            raise HTTPException(423, blocked[0], headers={"Retry-After": str(blocked[1])})
+
+    def maintenance_view():
+        if maintenance is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "error": maintenance.error,
+            "lease": maintenance.lease(),
+            "revoked_ids": maintenance.revoked_ids(),
+        }
+
+    async def refresh_maintenance():
+        if maintenance is None:
+            return
+        try:
+            view = await status()
+            await asyncio.to_thread(
+                maintenance.write_status,
+                {
+                    "phase": view["phase"],
+                    "loaded_model": view["loaded_model"],
+                    "active_requests": view["active_requests"],
+                    "native_busy": view["native_busy"],
+                    "lifecycle_busy": manager.lifecycle_busy,
+                },
+            )
+        except Exception:
+            log.warning("maintenance status refresh failed", exc_info=True)
+
+    async def maintenance_loop():
+        while True:
+            await refresh_maintenance()
+            await asyncio.sleep(2)
+
+    # A held lease must never stop the configured default model from starting.
+    manager.lease_guard = lease_guard if maintenance and not config.get("default") else None
 
     @asynccontextmanager
     async def lifespan(app):
@@ -112,14 +163,22 @@ def create_app(config, admin_key, inference_key, state_dir):
                         "Default model failed to start; inspect native processes and engine log"
                     )
                     manager.phase = "error"
+                finally:
+                    if maintenance is not None:
+                        manager.lease_guard = lease_guard
 
         startup = asyncio.create_task(initialise())
         supervisor = asyncio.create_task(watchdog())
+        publisher = asyncio.create_task(maintenance_loop()) if maintenance else None
         try:
             yield
         finally:
-            supervisor.cancel()
-            await asyncio.gather(supervisor, return_exceptions=True)
+            for task in (supervisor, publisher):
+                if task is not None:
+                    task.cancel()
+            await asyncio.gather(
+                supervisor, *([publisher] if publisher else []), return_exceptions=True
+            )
             startup.cancel()
             try:
                 await startup
@@ -135,6 +194,8 @@ def create_app(config, admin_key, inference_key, state_dir):
         redoc_url=None,
     )
     app.state.manager = manager
+    app.state.maintenance = maintenance
+    app.state.refresh_maintenance = refresh_maintenance
     browser_auth = BrowserAuth(state_dir, config.get("browser_auth", {}))
     app.state.browser_auth = browser_auth
     install_routes(app, browser_auth, config)
@@ -311,13 +372,32 @@ def create_app(config, admin_key, inference_key, state_dir):
             "native_processes": [
                 {"pid": p, "start_time": s} for p, s in manager.native_processes()
             ],
+            "maintenance": maintenance_view(),
         }
+
+    @app.get("/api/maintenance")
+    async def maintenance_state():
+        return maintenance_view()
+
+    @app.delete("/api/maintenance")
+    async def break_maintenance():
+        if maintenance is None:
+            raise HTTPException(404, "Maintenance leases are not enabled")
+        broken = await asyncio.to_thread(maintenance.break_lease)
+        if broken is None:
+            raise HTTPException(404, "No maintenance lease is held")
+        await refresh_maintenance()
+        return {**maintenance_view(), "lease": broken}
 
     @app.post("/api/engine")
     async def engine(payload: EngineSelection):
+        enforce_lease()
         if manager.lifecycle_busy and not (payload.force and manager.phase == "loading"):
             raise HTTPException(409, "Lifecycle operation already running")
-        await manager.select_engine(payload.engine, payload.force)
+        try:
+            await manager.select_engine(payload.engine, payload.force)
+        finally:
+            await refresh_maintenance()
         return await status()
 
     @app.get("/api/engines")
@@ -406,6 +486,7 @@ def create_app(config, admin_key, inference_key, state_dir):
 
     @app.post("/api/model")
     async def model(payload: ModelSelection):
+        enforce_lease()
         if manager.lifecycle_busy and not (payload.force and manager.phase == "loading"):
             raise HTTPException(409, "Lifecycle operation already running")
         try:
@@ -418,13 +499,18 @@ def create_app(config, admin_key, inference_key, state_dir):
             )
         except (OSError, RuntimeError, TimeoutError):
             raise HTTPException(503, "Backend startup failed; inspect local engine log") from None
+        finally:
+            await refresh_maintenance()
         return await status()
 
     @app.post("/api/unload")
     async def unload(payload: Force):
         if manager.lifecycle_busy and not (payload.force and manager.phase == "loading"):
             raise HTTPException(409, "Lifecycle operation already running")
-        await manager.unload(payload.force)
+        try:
+            await manager.unload(payload.force)
+        finally:
+            await refresh_maintenance()
         return await status()
 
     @app.get("/v1/models")

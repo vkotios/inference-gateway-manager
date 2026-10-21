@@ -96,9 +96,7 @@ class Maintenance:
 
     def _open_dir(self):
         try:
-            fd = os.open(
-                self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-            )
+            fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         except OSError as exc:
             self.error = f"cannot open maintenance directory: {exc.strerror}"
             raise DirectoryError(self.error) from None
