@@ -13,13 +13,19 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        value = (
+            [{"id": 0, "is_processing": False, "n_ctx": 4096}]
+            if self.path == "/slots"
+            else {"status": "ok"}
+        )
+        # Optional source-derived protocol snapshot for engine contract tests.
+        slots = Path(sys.argv[2]) / "slots.json" if len(sys.argv) > 2 else None
+        if self.path == "/slots" and slots is not None and slots.is_file():
+            value = json.loads(slots.read_text())
+        # Optional warmup simulation: the slot stays busy while --busy-while-exists=<path> exists.
         if self.path == "/slots" and Handler.busy_until is not None:
             busy = Path(Handler.busy_until).exists()
             value = [{"id": 0, "is_processing": busy, "n_ctx": 4096}]
-        elif self.path == "/slots":
-            value = [{"id": 0, "is_processing": False, "n_ctx": 4096}]
-        else:
-            value = {"status": "ok"}
         body = json.dumps(value).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
@@ -34,6 +40,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: fixture\n\ndata: [DONE]\n\n")
 
 
-if len(sys.argv) > 3:
-    Handler.busy_until = sys.argv[3]
+# Opt-in only: other tests pass arbitrary paths and settings as positional argv.
+for arg in sys.argv[2:]:
+    if arg.startswith("--busy-while-exists="):
+        Handler.busy_until = arg.split("=", 1)[1]
 ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()

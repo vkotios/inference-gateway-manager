@@ -1,6 +1,16 @@
 # Agent and controller integration
 
-IGM provides lifecycle and inference APIs, not a model-selection policy, task scheduler, orchestration plugin or distributed lease. An HTTP-capable agent can manage it independently of the provider running that agent. Loading a skill or setting an environment variable alone does not implement this integration.
+IGM provides lifecycle and inference APIs. The companion skill supplies a recommended model/context selection procedure; the gateway does not implement that policy, a task scheduler or a distributed lease. An MCP- or HTTP-capable agent can manage it independently of the provider running that agent. Loading a skill or setting an environment variable alone does not implement this integration.
+
+The optional [remote stdio MCP adapter](features.md#mcp-on-another-machine) supplies discovery, explicit lifecycle control and bounded prompt delegation. It runs on the harness machine and does not execute returned tools or modify workspace files.
+
+For Claude/Codex setup, see [MCP registration and companion skill installation](mcp-registration.md). MCP is the tool interface; this guide is the contract/reference; the skill teaches the parent agent how to use both. They remain complementary.
+
+## Parent model and context planning
+
+Use the [context sizing procedure](../skills/inference-gateway-manager/references/context-sizing.md) before starting a worker. Forecast instructions/tool schemas, selected source and conversation/tool growth through a testable milestone, reserve generation/compaction space, and record the client budget and effective backend capacity. Reuse a larger matching warm backend without reloading merely to shrink the client window. Measure completion time and repeated early compactions rather than assuming a smaller declared capacity is faster.
+
+With MCP, discover through `gateway_catalog` and `gateway_status`; use `gateway_load` with the actual engine/model IDs and supported settings only when a change is needed. Read back effective settings and selection ID. The parent local terminal then configures and starts OpenCode with the exact model, inference credential and selection guard. `gateway_delegate` is a text call, not a coding session. Keep the backend selection stable until the worker finishes. Remote cloud execution needs its own network/terminal access; a cloud model used in a local coding app can use that app's local tools.
 
 ## Connections and authority
 
@@ -16,22 +26,24 @@ Control authority includes force interruption and optionally administrator-enabl
 
 | Method | Route | Body / result |
 |---|---|---|
-| GET | `/api/engines` | `engines[]` with engine `id`, `label`, `models[]` containing `id`, `context`, `enabled` |
-| GET | `/api/status` | `selected_engine`, `loaded_model`, `phase`, `busy`, `native_busy`, `occupancy_source`, `active_requests`, `requests`, `error`, process identities |
+| GET | `/api/engines` | `engines[]` with engine `id`, `label`, `models[]` containing `id`, `context`, `enabled`, `context_limits`, `reasoning_modes`, `reasoning_change` |
+| GET | `/api/status` | `selected_engine`, `loaded_model`, `active_settings`, `selection_id`, `phase`, `busy`, `native_busy`, `occupancy_source`, `active_requests`, `requests`, `error`, process identities |
 | GET | `/api/telemetry` | Host measurements; unavailable counters remain null |
 | POST | `/api/engine` | `{"engine":"ENGINE_ID","force":false}`; select only, stop previous engine if switching |
-| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; load in selected engine, stop previous model if changing |
+| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; optional `engine`, `context`, `reasoning`; validate before stopping, context changes reload |
 | POST | `/api/unload` | `{"force":false}`; stop model/backend, retain selected engine |
 | GET | `/v1/models` | Enabled models with `owned_by`, `context_length`, loaded/unloaded `status` |
 | POST | `/v1/chat/completions` | OpenAI-compatible body; `model` must equal loaded model; SSE supported |
 
 `ENGINE_ID` and `MODEL_ID` are placeholders discovered from the catalog, not literal values to submit. Other inference transports are backend-dependent. Add `X-Client-Name` to inference requests for useful activity labels; never put secrets in that label.
 
+Compare the requested context/reasoning with `active_settings` before reusing a ready model. Include its `selection_id` as `X-IGM-Selection-ID` on inference to reject settings that changed before admission. This guard does not reserve the backend or replace orchestration ownership. See [settings and client budgets](features.md#context-and-reasoning) for capability declarations and explicit client reasoning precedence.
+
 ## Recommended controller procedure
 
 1. **Acquire your orchestration-level exclusive ownership.** Centralize the lifecycle controller or use an external coordination mechanism spanning the work interval, not just the switch request. IGM does not issue a durable lease. Dashboard operators and other controllers can still race.
 2. **Discover the catalog and read status.** Select an enabled model under its actual engine. Treat catalog context as a configuration value, not proof of transport/tool compatibility.
-3. **Reuse when ready.** If the requested engine/model already match and `phase == "ready"`, no lifecycle write is necessary. Workers may still receive a busy response; there is no queue.
+3. **Reuse when ready.** If the requested engine/model and reasoning settings match, `phase == "ready"`, and effective capacity covers the planned client budget, no lifecycle write is necessary. Workers may still receive a busy response; there is no queue.
 4. **Before a change, inspect occupancy.** Active requests or `busy == true` mean wait/recheck. For native-slot backends, unknown `native_busy` is not idle. If the gateway is unloaded, unknown native-slot state can be normal; a `force:false` load remains subject to the gateway's unmanaged-process/admission checks. Do not invent an idle result to get past a refusal.
 5. **Select the engine with `force:false`.** Verify the returned/read-back selection. Selection alone does not load a model. Selecting the already-selected engine is normally a no-op, not an unload.
 6. **Load the model with `force:false`.** `/api/model` can remain pending for the model's startup duration; use a client timeout appropriate to the configured host startup timeout and resource conditions. There is no operation-ID polling API. On connection loss or timeout, re-read status before deciding whether to retry: do not assume the load completed or failed.
@@ -76,7 +88,7 @@ This is an operator walkthrough, not an implementation of locking, retry policy 
 
 ## Agent skill
 
-Load [the portable skill](../skills/inference-gateway-manager/SKILL.md) through your harness's documented mechanism. It supplies this operating discipline; it does not install tools, supply secrets, make scheduling decisions or enforce permissions. No automatic skill discovery across all harnesses is claimed.
+Install [the portable skill](../skills/inference-gateway-manager/SKILL.md), including its `references` folder, using the [client-specific instructions](mcp-registration.md#install-the-companion-skill). It supplies the MCP/HTTP operating discipline and a context planning method, but does not install tools, supply secrets, execute scheduling or enforce permissions. It is not included in the Python wheel/acceptance ZIP, and registering the MCP does not install it. No automatic skill discovery across all harnesses is claimed.
 
 ## Acceptance checks
 

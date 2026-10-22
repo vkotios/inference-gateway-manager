@@ -1,12 +1,38 @@
+import json
 import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from gateway.core import Manager, identity, signal_identity
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("executable", ["gufo", ".gufo-wrapped"])
+async def test_example_refuses_switch_with_unmanaged_gufo(tmp_path, monkeypatch, executable):
+    config = json.loads((Path(__file__).parents[1] / "examples/config.example.json").read_text())
+    process = SimpleNamespace(
+        pid=987654,
+        info={
+            "exe": f"/nix/store/gufo-0.19.0/bin/{executable}",
+            "cmdline": ["/bin/gufo", "serve", "llm", "--model", "/models/qwen.gguf"],
+        },
+    )
+    monkeypatch.setattr("gateway.core.psutil.process_iter", lambda attrs: [process])
+    monkeypatch.setattr("gateway.core.identity", lambda pid: (pid, 123))
+    manager = Manager(config, tmp_path)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await manager.select_engine("gufo")
+        assert exc.value.status_code == 409
+        assert manager.engine is None
+    finally:
+        await manager.close()
 
 
 def test_signal_uses_pidfd_instead_of_racy_numeric_kill(monkeypatch):

@@ -14,7 +14,7 @@ def warmup_config(tmp_path):
     spec = cfg["engines"]["one"]["models"]["fixture"]
     marker = tmp_path / "warmup-busy"
     marker.touch()
-    spec["argv"] = spec["argv"] + [str(marker)]
+    spec["argv"] = spec["argv"] + [f"--busy-while-exists={marker}"]
     cfg["warmup_timeout"] = 2
     return cfg, marker
 
@@ -54,6 +54,22 @@ async def test_warmup_timeout_still_reaches_ready(tmp_path):
         await manager.select_engine("one")
         await asyncio.wait_for(manager.load_model("fixture"), 10)
         assert manager.phase == "ready", "warmup timeout degrades to ready, not error"
+    finally:
+        marker.unlink(missing_ok=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_warmup_hold_never_outlasts_startup_timeout(tmp_path):
+    cfg, marker = warmup_config(tmp_path)
+    cfg["warmup_timeout"] = 120
+    cfg["startup_timeout"] = 4
+    app = create_app(cfg, "a" * 32, "b" * 32, tmp_path)
+    manager = app.state.manager
+    try:
+        await manager.select_engine("one")
+        await asyncio.wait_for(manager.load_model("fixture"), 10)
+        assert manager.phase == "ready", "a healthy server must not time out while warming up"
     finally:
         marker.unlink(missing_ok=True)
         await manager.close()

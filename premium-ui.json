@@ -1,0 +1,18 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["gateway/static"],
+  "locale": "en-GB",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": {"Select/Listbox": "native"},
+  "requiredCommands": ["browser", "dashboard-unit", "syntax"],
+  "commands": {
+    "browser": ".venv/bin/python -m pytest tests/test_dashboard_browser.py -q",
+    "dashboard-unit": ".venv/bin/python -m pytest tests/test_review_dashboard.py -q",
+    "syntax": "node --check gateway/static/app.js"
+  },
+  "evidence": {
+    "crudFullFlow": "tests/test_dashboard_browser.py",
+    "failurePaths": "tests/test_dashboard_browser.py"
+  }
+}

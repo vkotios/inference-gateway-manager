@@ -1,7 +1,7 @@
 """CLI. Credentials are generated locally and never printed."""
 
 import argparse
-import fcntl
+import asyncio
 import json
 import os
 import secrets
@@ -11,12 +11,42 @@ from .config import validate
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LAN inference gateway manager (Linux)")
+    parser = argparse.ArgumentParser(description="LAN inference gateway and remote controller")
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser(
         "init-keys", help="Create a private credential file; never overwrite"
     )
     init.add_argument("--output", default=".local/credentials.env")
+    password = commands.add_parser("set-password", help="Set/reset the local operator password")
+    password.add_argument("--state-dir", default=".local/state")
+    models = commands.add_parser("models", help="Inspect/register models on the gateway host")
+    model_commands = models.add_subparsers(dest="model_command", required=True)
+    for name in ("inspect", "add"):
+        register = model_commands.add_parser(name)
+        register.add_argument("--url", required=True)
+        register.add_argument("--engine", required=True)
+        register.add_argument("--path", required=True, help="Absolute path on the gateway host")
+        register.add_argument("--profile")
+        register.add_argument("--artifact", action="append", default=[], metavar="NAME=HOST_PATH")
+        register.add_argument("--model", help="Optional unique model ID")
+        register.add_argument("--context", type=int)
+        register.add_argument("--reasoning", choices=["auto", "on", "off"])
+        if name == "add":
+            register.add_argument("--dry-run", action="store_true")
+    remove = model_commands.add_parser(
+        "remove", help="Remove a saved registration; keep model files"
+    )
+    remove.add_argument("--url", required=True)
+    remove.add_argument("--engine", required=True)
+    remove.add_argument("--model", required=True)
+    fragment = commands.add_parser("client-config", help="Print a Hermes/OpenCode config fragment")
+    fragment.add_argument("--url", required=True)
+    fragment.add_argument("--client", required=True, choices=["hermes", "opencode"])
+    fragment.add_argument("--model", required=True)
+    fragment.add_argument(
+        "--context", type=int, help="Optional smaller client budget; never resizes engine"
+    )
+    fragment.add_argument("--output-tokens", type=int, default=4096)
     serve = commands.add_parser("serve", help="Serve UI, control API and inference proxy")
     serve.add_argument("--config", required=True)
     serve.add_argument("--state-dir", default=".local/state")
@@ -27,6 +57,83 @@ def main():
         "--confirm", required=True, help="Repeat the exact action; interrupts work"
     )
     args = parser.parse_args()
+    if args.command == "set-password":
+        import getpass
+
+        from .browser_auth import BrowserAuth
+
+        first = getpass.getpass("New operator password: ")
+        if first != getpass.getpass("Repeat password: "):
+            parser.error("Passwords do not match")
+        try:
+            BrowserAuth(args.state_dir, {}).set_password(first)
+        except (OSError, ValueError) as exc:
+            parser.exit(1, str(exc) + "\n")
+        print(
+            "Password saved; existing browser sessions revoked. Enable browser_auth in configuration."
+        )
+        return
+    if args.command in ("models", "client-config"):
+        from .client import GatewayClient, GatewayError, client_fragment
+
+        async def remote():
+            async with GatewayClient(args.url, os.environ.get("IGM_CONTROL_KEY", "")) as client:
+                if args.command == "client-config":
+                    catalog = await client.catalog()
+                    state = await client.status()
+                    model = next(
+                        (
+                            m
+                            for e in catalog["engines"]
+                            for m in e["models"]
+                            if m["id"] == args.model and m.get("enabled", True)
+                        ),
+                        None,
+                    )
+                    if model is None:
+                        raise ValueError("Choose an enabled model from the gateway catalog")
+                    capacity = model.get("context")
+                    if state.get("loaded_model") == args.model and state.get("phase") == "ready":
+                        capacity = (state.get("active_settings") or {}).get("context", capacity)
+                    if type(capacity) is not int or capacity <= 0:
+                        raise ValueError(
+                            "Model context is unknown; configure/verify its capacity first"
+                        )
+                    budget = args.context if args.context is not None else capacity
+                    if budget > capacity:
+                        raise ValueError(
+                            "Client budget exceeds the served capacity; reload the engine first"
+                        )
+                    return client_fragment(
+                        args.client, args.url, args.model, budget, args.output_tokens
+                    )
+                if args.model_command == "remove":
+                    return await client.remove_model(args.engine, args.model)
+                artifacts = {}
+                for argument in args.artifact:
+                    name, separator, path = argument.partition("=")
+                    if not separator or not name or not path or name in artifacts:
+                        raise ValueError("Each --artifact must be a unique NAME=HOST_PATH")
+                    artifacts[name] = path
+                inspection = await client.inspect_model(
+                    args.engine,
+                    args.path,
+                    args.profile,
+                    artifacts,
+                    model=args.model,
+                    context=args.context,
+                    reasoning=args.reasoning,
+                )
+                candidate = inspection["candidate"]
+                if args.model_command == "inspect" or getattr(args, "dry_run", False):
+                    return inspection
+                return await client.add_model(candidate)
+
+        try:
+            print(json.dumps(asyncio.run(remote()), indent=2))
+        except (ValueError, GatewayError) as exc:
+            parser.exit(1, str(exc) + "\n")
+        return
     if args.command == "recovery":
         from urllib.parse import urlsplit
 
@@ -78,6 +185,8 @@ def main():
     state = Path(args.state_dir)
     state.mkdir(parents=True, exist_ok=True)
     # Kept open for the entire server lifetime. Never use multiple workers.
+    import fcntl
+
     with (state / "manager.lock").open("a") as lease:
         fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         import uvicorn
