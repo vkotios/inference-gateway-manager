@@ -136,6 +136,23 @@ function chart(id, values, value) {
   const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
   line.setAttribute("points", values.map((v,i) => (i*300/59) + "," + (58-v*.54)).join(" ")); $(id).replaceChildren(line);
 }
+function describeGeneration(g) {
+  const live = g?.live, last = g?.last, num = (v, d = 1) => Number(v).toLocaleString(undefined, {maximumFractionDigits: d});
+  if (live) {
+    if (live.state === "prefill") return `Prefill · waiting for first token · ${num(live.elapsed_seconds)} s`;
+    return `Generating · ${live.tokens_per_second == null ? "measuring" : num(live.tokens_per_second) + " tok/s"} · ${num(live.tokens, 0)} tokens (estimate)`;
+  }
+  if (!last) return "No generation data since the gateway started";
+  const parts = [];
+  parts.push(last.generation?.tokens_per_second == null ? "Generation unknown" : `Generation ${num(last.generation.tokens_per_second)} tok/s`);
+  parts.push(last.prefill?.tokens_per_second == null ? "Prefill unknown" : `Prefill ${num(last.prefill.tokens_per_second)} tok/s`);
+  if (last.time_to_first_token_seconds != null) parts.push(`first token ${num(last.time_to_first_token_seconds)} s`);
+  if (last.generation?.tokens != null) parts.push(`${num(last.generation.tokens, 0)} tokens`);
+  if (last.draft) parts.push(`${num(last.draft.acceptance * 100, 0)}% of drafts accepted`);
+  if (last.source === "estimated") parts.push("estimated");
+  if (last.outcome !== "complete") parts.push(last.outcome);
+  return "Last: " + parts.join(" · ");
+}
 let leaseId = null, breaking = false;
 function showMaintenance(info) {
   const lease = info?.enabled && info.lease?.held ? info.lease : null;
@@ -168,6 +185,7 @@ async function poll() {
     $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
     $("busy").textContent = s.busy === true ? "Processing" : s.busy === false ? "Idle" : "Unknown";
     $("activity").textContent = s.active_requests + " active gateway request(s)";
+    $("generation").textContent = describeGeneration(s.generation);
     $("native").textContent = "Native occupancy: " + (s.native_busy == null ? "unknown" : s.native_busy ? "busy" : "idle");
     $("processes").textContent = s.native_processes.map(p => "PID " + p.pid + " · start " + p.start_time).join("\n") || "No native engines detected";
     const memory = t.memory, pressure = memory.total_bytes ? memory.pressure_bytes / memory.total_bytes * 100 : 0;

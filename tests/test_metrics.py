@@ -218,3 +218,19 @@ def test_metrics_keeps_last_and_exposes_live():
     view = metrics.view(tap)
     assert view["last"] == summary
     assert view["live"]["tokens"] == 1
+
+
+def test_real_llama_cpp_final_chunk_is_read_exactly():
+    # Captured from llama-server b10902 on this host with a 48-token streamed request.
+    from pathlib import Path
+
+    chunk = json.loads(
+        Path(__file__).with_name("fixtures").joinpath("llama-cpp-final-chunk.json").read_text()
+    )
+    tap, _ = make()
+    tap.feed(sse(token(), token(), chunk))
+    s = finish(tap)
+    assert s["source"] == "engine"
+    assert s["generation"] == {"tokens": 48, "tokens_per_second": 73.9}
+    assert s["prefill"] == {"tokens": 19, "tokens_per_second": 140.8, "cached_tokens": 0}
+    assert s["draft"] == {"proposed": 35, "accepted": 29, "acceptance": 0.829}

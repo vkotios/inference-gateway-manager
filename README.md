@@ -22,6 +22,7 @@ A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar and Gufo*
 - Separate control and inference credentials. No credentials, argv or filesystem paths in the public catalog.
 - Validated context and reasoning defaults through the GUI/API, password login with remembered browsers, and registration from existing host model files. See [controls and remote MCP](docs/features.md).
 - An optional [maintenance lease](docs/maintenance-lease.md) lets a co-located job runner pause model loads while it uses the host's shared memory, with an operator override.
+- [Generation metrics](docs/generation-metrics.md) report generation and prefill tokens/s, live and for the last request, in `/api/status` and on the dashboard.
 - Unknown counters remain null. RAM pressure is total minus available, **not model RSS**. Unified GPU memory counters may overlap RAM.
 
 ## Host versus client
