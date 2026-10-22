@@ -105,3 +105,42 @@ def test_gufo_profile_obeys_native_serve_llm_parser():
     llm.add_argument("--context", type=int, required=True)
     parsed = parser.parse_args(spec["argv"][1:])
     assert parsed.sessions == 1 and parsed.port == 8083 and parsed.context == 4096
+
+
+def _example_gufo():
+    return validate(
+        json.loads(
+            (Path(__file__).resolve().parents[1] / "examples/config.example.json").read_text()
+        )
+    )["engines"]["gufo"]
+
+
+def test_gufo_is_launched_natively_never_through_a_container_runtime():
+    gufo = _example_gufo()
+    specs = [*gufo["models"].values(), *gufo["profiles"].values()]
+    assert specs
+    for spec in specs:
+        executable = Path(spec["argv"][0]).name
+        assert executable == "gufo"
+        assert not {"podman", "docker", "toolbox", "nerdctl"} & set(spec["argv"])
+
+
+def test_gufo_dflash2_profile_declares_projector_and_draft_artifacts():
+    profile = _example_gufo()["profiles"]["dflash2-gguf"]
+    argv = profile["argv"]
+    assert profile["artifacts"] == {
+        "mmproj": {"kind": "file", "format": "gguf"},
+        "draft": {"kind": "file", "format": "gguf"},
+    }
+    assert argv[argv.index("--mmproj") + 1] == "{artifact.mmproj}"
+    assert argv[argv.index("--speculative") + 1] == "dflash2"
+    assert argv[argv.index("--dflash-model") + 1] == "{artifact.draft}"
+    assert argv[argv.index("--sessions") + 1] == "1"
+
+
+def test_native_matchers_cover_gufo_executable_names():
+    cfg = json.loads(
+        (Path(__file__).resolve().parents[1] / "examples/config.example.json").read_text()
+    )
+    names = {m.get("exe") for m in cfg["native_matchers"]}
+    assert {"gufo", "gufo-server", ".gufo-wrapped"} <= names

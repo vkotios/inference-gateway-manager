@@ -210,21 +210,34 @@ inference request can briefly receive the ordinary lifecycle-busy 409 during tha
 
 ## Gufo
 
-The fifth engine is `gufo`. Its administrator-owned profile uses the installed Gufo
-binary with `serve ... llm`, loopback port 8083, `--sessions 1`, `--context`, and
-`--served-model-name`. Readiness uses `/ready`; native occupancy uses `/slots`.
+The fifth engine is `gufo`. IGM launches and supervises a **natively installed** Gufo binary:
+there is no container layer. The administrator-owned profile runs `gufo serve ... llm` on
+loopback port 8083, with `--sessions 1`, `--context` and `--served-model-name`. Readiness
+uses `/ready`; native occupancy uses `/slots`. Like every other engine, the process is a
+direct child of the gateway, so ownership, unload and shutdown need no extra forwarding.
 
-Install Gufo separately using its [upstream instructions](https://github.com/gufo-org/gufo).
-Replace placeholder executable/model paths in the example; do not replace an existing
-private deployment configuration with the whole example. Supported architectures and
-weight formats follow the installed Gufo release, not every GGUF accepted by llama.cpp.
-The example matches both `gufo` and the `.gufo-wrapped` executable used by upstream's
-Nix package and official runtime container. Preserve both native matchers when adapting
-the launch command. Container launches must forward `IGM_ENGINE_RUN_ID` to the engine
-so the gateway can verify ownership even when the container process is reparented.
-Speculative drafts, projectors and their compatibility remain explicit optional artifacts.
-The initial integration covers text, streaming, and client-managed tool-call workflows.
-It does not add Gufo's audio, image-generation or video APIs to IGM.
+Build and install Gufo on the gateway host by following
+[Native Gufo on the gateway host](gufo-native.md); upstream's own
+[build instructions](https://github.com/gufo-org/gufo) are the authority for toolchain
+requirements. Replace the placeholder executable/model paths in the example; do not
+replace an existing private deployment configuration with the whole example. Supported
+architectures and weight formats follow the installed Gufo release, not every GGUF accepted
+by llama.cpp. The native matchers cover the `gufo` executable, the `gufo-server` alias and
+the `.gufo-wrapped` name a Nix-built package uses. Preserve them when adapting the launch
+command.
+
+Two example profiles are included. `gguf` serves a single GGUF. `dflash2-gguf` also declares
+two explicit companion artifacts, a vision projector (`mmproj`) and a DFlash2 draft model
+(`draft`), and passes them with `--mmproj` and `--speculative dflash2 --dflash-model`. A
+draft must be the file Gufo documents for that target; do not substitute a similarly named
+draft. Register such a model with
+`inference-gateway models add --engine gufo --profile dflash2-gguf --path TARGET.gguf --artifact mmproj=... --artifact draft=...`.
+
+If the Gufo binary needs runtime libraries outside the system paths, link it with a fixed
+`RUNPATH` or add an administrator-owned `env` mapping to the profile. Do not depend on the
+gateway's own environment. The initial integration covers text, streaming, and
+client-managed tool-call workflows. It does not add Gufo's audio, image-generation or
+video APIs to IGM.
 
 ## MCP on another machine
 
