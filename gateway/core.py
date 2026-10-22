@@ -81,6 +81,8 @@ class Manager:
         self.loading_task = None
         self.load_interrupted = False
         self.launch_id = None
+        # Set by the API layer when a maintenance lease directory is configured.
+        self.lease_guard = None
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=5), trust_env=False)
 
     @property
@@ -88,6 +90,12 @@ class Manager:
         return self.lock.locked() or (
             self.loading_task is not None and not self.loading_task.done()
         )
+
+    def check_lease(self):
+        """Refuse a stop/start while a maintenance lease is held (inside the lifecycle lock)."""
+        blocked = self.lease_guard() if self.lease_guard is not None else None
+        if blocked:
+            raise HTTPException(423, blocked[0], headers={"Retry-After": str(blocked[1])})
 
     def native_processes(self):
         found = []
@@ -304,6 +312,7 @@ class Manager:
                 raise HTTPException(404, "Unknown engine")
             if engine == self.engine:
                 return
+            self.check_lease()
             await self._stop(force)
             if self.native_processes():
                 raise HTTPException(409, "Unmanaged native engines present; reconcile first")
@@ -396,6 +405,7 @@ class Manager:
                     self.active_settings["reasoning"] = settings["reasoning"]
                     self.selection_id = secrets.token_hex(24)
                     return
+            self.check_lease()
             await self._stop(force)
             if self.native_processes():
                 raise HTTPException(409, "Native engines still running; load refused")
