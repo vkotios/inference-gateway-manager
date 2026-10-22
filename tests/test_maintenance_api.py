@@ -200,8 +200,9 @@ async def test_startup_default_load_is_not_gated_by_a_held_lease(tmp_path):
     write_lease(tmp_path)
     app = create_app(config, ADMIN, INFERENCE, tmp_path / "state")
     async with app.router.lifespan_context(app):
+        # The guard is installed by the startup task just after the load reports ready.
         for _ in range(100):
-            if app.state.manager.phase == "ready":
+            if app.state.manager.phase == "ready" and app.state.manager.lease_guard is not None:
                 break
             await __import__("asyncio").sleep(0.1)
         assert app.state.manager.phase == "ready"
