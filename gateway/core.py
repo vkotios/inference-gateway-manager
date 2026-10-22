@@ -459,6 +459,8 @@ class Manager:
                     )
                 self.capture_owned()
                 deadline = time.monotonic() + self.config.get("startup_timeout", 900)
+                warmup_deadline = None
+                healthy = False
                 while time.monotonic() < deadline:
                     if self.process.poll() is not None:
                         raise RuntimeError("Backend exited while loading; inspect local engine log")
@@ -472,13 +474,37 @@ class Manager:
                         r = await self.http.get(
                             spec["base_url"] + spec.get("ready_path", "/health"), timeout=2
                         )
-                        if r.is_success:
+                    except httpx.HTTPError:
+                        r = None
+                    if r is not None and r.is_success:
+                        healthy = True
+                        # Health success only proves the HTTP server is up. Native
+                        # engines run an empty-prompt warmup after that: hold the
+                        # loading phase until slots report idle so the first
+                        # admitted call is not rejected as a busy engine.
+                        if warmup_deadline is None:
+                            warmup_deadline = time.monotonic() + self.config.get(
+                                "warmup_timeout", 120
+                            )
+                        if (
+                            spec.get("probe", "slots") != "slots"
+                            or await self.native_busy() is False
+                        ):
+                            self.phase = "ready"
+                            return
+                        if time.monotonic() >= warmup_deadline:
+                            # Slots never settled to a verified idle state;
+                            # admission still fail-closes on unknown occupancy.
                             self.phase = "ready"
                             await self.native_busy()
                             return
-                    except httpx.HTTPError:
-                        pass
                     await asyncio.sleep(0.25)
+                if healthy:
+                    # The server answered /health but the warmup hold outlasted
+                    # startup_timeout; a working engine must not fail the load.
+                    self.phase = "ready"
+                    await self.native_busy()
+                    return
                 raise TimeoutError("Model startup timed out")
             except BaseException:
                 await finish_cleanup(asyncio.create_task(self._stop(force=True)))
