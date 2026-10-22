@@ -1,0 +1,27 @@
+{
+ "choices": [
+  {
+   "finish_reason": "length",
+   "index": 0,
+   "delta": {}
+  }
+ ],
+ "created": 0,
+ "id": "chatcmpl-redacted",
+ "model": "ornith",
+ "system_fingerprint": "b10902-df03399b8",
+ "object": "chat.completion.chunk",
+ "timings": {
+  "cache_n": 0,
+  "prompt_n": 19,
+  "prompt_ms": 134.933,
+  "prompt_per_token_ms": 7.101736842105263,
+  "prompt_per_second": 140.81062453217524,
+  "predicted_n": 48,
+  "predicted_ms": 636.205,
+  "predicted_per_token_ms": 13.536276595744681,
+  "predicted_per_second": 73.87555897863109,
+  "draft_n": 35,
+  "draft_n_accepted": 29
+ }
+}

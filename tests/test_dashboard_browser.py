@@ -497,3 +497,12 @@ async def test_saved_and_loaded_reasoning_defaults_are_preserved(browser_page, l
     await expect(page.locator("#notice")).to_have_text("Lifecycle action completed.")
     payload = [r for r in api.requests if r[1] == "model"][-1][2]
     assert payload["context"] == 6144 and payload["reasoning"] == "on"
+
+
+async def test_generation_line_renders_after_sign_in(browser_page, live_gateway):
+    page = browser_page
+    await page.goto(live_gateway[0])
+    await login(page)
+    await expect(page.locator("#generation")).to_have_text(
+        "No generation data since the gateway started"
+    )

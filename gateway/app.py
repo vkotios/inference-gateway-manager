@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, StrictInt
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
 from .core import Manager, finish_cleanup
 from .maintenance import Maintenance
+from .metrics import Metrics, Tap
 from .registry import Registry
 from .settings import apply_reasoning, summary
 from .supervision import watchdog
@@ -102,6 +103,7 @@ def create_app(config, admin_key, inference_key, state_dir):
     if min(len(admin_key), len(inference_key)) < 32 or admin_key == inference_key:
         raise ValueError("Two different keys of at least 32 characters are required")
     manager = Manager(config, Path(state_dir))
+    generation = Metrics()
     maintenance = (
         Maintenance(config["maintenance"], manager.state_dir) if "maintenance" in config else None
     )
@@ -373,6 +375,9 @@ def create_app(config, admin_key, inference_key, state_dir):
                 {"pid": p, "start_time": s} for p, s in manager.native_processes()
             ],
             "maintenance": maintenance_view(),
+            "generation": generation.view(
+                next((v["tap"] for v in manager.active.values() if "tap" in v), None)
+            ),
         }
 
     @app.get("/api/maintenance")
@@ -601,6 +606,9 @@ def create_app(config, admin_key, inference_key, state_dir):
                 "task": request.scope["igm_response_task"],
             }
         upstream = None
+        tap = Tap()
+        client_name = manager.active[request_id]["client"]
+        manager.active[request_id]["tap"] = tap
         try:
             req = manager.http.build_request(
                 "POST", spec["base_url"] + path, json=body, headers={"Accept-Encoding": "identity"}
@@ -615,13 +623,29 @@ def create_app(config, admin_key, inference_key, state_dir):
         except BaseException:
             manager.active.pop(request_id, None)
             raise
+        tap.configure(upstream.headers.get("content-type"))
+        model_name = manager.model
 
         async def stream():
+            outcome = "cancelled"
             try:
                 async for chunk in upstream.aiter_raw():
+                    tap.feed(chunk)
                     yield chunk
+                outcome = "complete"
+            except Exception:
+                outcome = "error"
+                raise
             finally:
                 await upstream.aclose()
+                try:
+                    generation.record(
+                        tap.summary(
+                            upstream.status_code, outcome, model=model_name, client=client_name
+                        )
+                    )
+                except Exception:
+                    pass
 
         return StreamingResponse(
             stream(),
