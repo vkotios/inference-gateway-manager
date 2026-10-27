@@ -61,7 +61,25 @@ Open the configured address and use the control key from your private credential
 
 ## Engine configuration
 
-The [example configuration](examples/config.example.json) exposes seven engine options, including Lucebox and ds4a, and administrator-owned launch profiles for registration. The API catalog and dashboard populate from configuration. For Kyojin launch details, ROCm runtime requirements, model IDs and acceptance steps, see [Kyojin integration](docs/kyojin.md). See [Lucebox and ds4a integration](docs/lucebox-ds4a.md) for portable launch profiles, DSpark artifacts and occupancy limits. The existing ds4 selection retains its `dwarfstar` ID. Updating the source example does not update an installed gateway's private configuration or reload its process.
+The [example configuration](examples/config.example.json) exposes seven engine selections. The dashboard, HTTP API and MCP discovery populate from this configuration.
+
+| Engine | Configuration ID | Example registration profile | Occupancy |
+| --- | --- | --- | --- |
+| llama.cpp | `llama` | GGUF | Native slots + gateway requests |
+| Strata | `strata` | Native GGUF or Strata pack | Native slots + gateway requests |
+| Kyojin | `kyojin` | EXL3 pack | Native slots + gateway requests |
+| DwarfStar (ds4) | `dwarfstar` | GGUF | Gateway requests only |
+| Gufo | `gufo` | GGUF, optionally with DFlash2 companions | Native slots + gateway requests |
+| Lucebox | `lucebox` | DeepSeek V4 GGUF without a draft | Gateway requests only |
+| ds4a (ds4fa fork) | `ds4a` | DeepSeek V4 Flash GGUF + native DSpark support GGUF | Gateway requests only |
+
+**ds4 and ds4a remain separate options.** The existing ds4 entry retains its `dwarfstar` ID and launch configuration. The `ds4a` entry uses the ds4fa fork and its own executable path, backend port and model ID.
+
+Lucebox and ds4a model examples are disabled until configured. Their profiles offer 4K, 8K, 16K, 32K, 64K and 128K context selections, with a 32K default. These capacities are administrator declarations; validate memory fit and model compatibility on the target hardware. The ds4a profile requires a compatible native DSpark companion file; Lucebox's example runs without a draft.
+
+Install the selected engines and weights independently, then edit paths, model IDs and approved model roots in the private host configuration. Registering a model does not load it: select the engine and explicitly load the model before inference. Gateway-only occupancy tracks requests through IGM and does not verify native idle; route all inference through the gateway.
+
+See [Lucebox and ds4a integration](docs/lucebox-ds4a.md) for launch profiles, DSpark artifacts, process matching and acceptance steps, and [Kyojin integration](docs/kyojin.md) for EXL3 setup and ROCm requirements. Updating the source example does not update an installed gateway's private configuration or reload its process.
 
 ## LAN security
 
