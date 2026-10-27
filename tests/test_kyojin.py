@@ -21,7 +21,7 @@ def example_config():
 
 
 @pytest.mark.asyncio
-async def test_four_engine_catalog_includes_kyojin_without_private_launch_details(tmp_path):
+async def test_example_catalog_includes_kyojin_without_private_launch_details(tmp_path):
     cfg = example_config()
     cfg["allowed_hosts"] = ["testserver"]
     cfg["native_matchers"] = [{"argv_contains": str(tmp_path)}]
@@ -33,7 +33,15 @@ async def test_four_engine_catalog_includes_kyojin_without_private_launch_detail
             headers={"Authorization": "Bearer " + "a" * 32},
         ) as client:
             catalog = (await client.get("/api/engines")).json()["engines"]
-            assert {e["id"] for e in catalog} == {"llama", "strata", "kyojin", "dwarfstar", "gufo"}
+            assert {e["id"] for e in catalog} == {
+                "llama",
+                "strata",
+                "kyojin",
+                "dwarfstar",
+                "gufo",
+                "lucebox",
+                "ds4a",
+            }
             kyojin = next(e for e in catalog if e["id"] == "kyojin")
             assert kyojin["label"] == "Kyojin"
             model = kyojin["models"][0]
