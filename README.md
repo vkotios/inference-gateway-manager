@@ -9,7 +9,7 @@
 
 [Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md)
 
-A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar and Gufo**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
+A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar (ds4), Gufo, Lucebox and ds4a**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
 
 ## What it does
 
@@ -59,9 +59,27 @@ Open the configured address and use the control key from your private credential
 
 `init-keys` generates **two different random keys for this installation**; they are not shared defaults. The file has owner-only permissions. Restarts reuse the same keys when you load that same file; cloning, installing or updating the package alone does not generate or rotate them. Open the private credential file locally on the server to obtain the values for your client. The dashboard password is separate. For finding the server's LAN address and entering the URL/keys on another computer, follow [server-to-client setup](docs/mcp-registration.md#obtain-the-server-connection-details).
 
-## Kyojin
+## Engine configuration
 
-The [example configuration](examples/config.example.json) exposes five engine options, including Gufo, and administrator-owned launch profiles for registration. The API catalog and dashboard populate from configuration. For Kyojin launch details, ROCm runtime requirements, model IDs and acceptance steps, see [Kyojin integration](docs/kyojin.md). Updating the source example does not update an installed gateway's private configuration or reload its process.
+The [example configuration](examples/config.example.json) exposes seven engine selections. The dashboard, HTTP API and MCP discovery populate from this configuration.
+
+| Engine | Configuration ID | Example registration profile | Occupancy |
+| --- | --- | --- | --- |
+| llama.cpp | `llama` | GGUF | Native slots + gateway requests |
+| Strata | `strata` | Native GGUF or Strata pack | Native slots + gateway requests |
+| Kyojin | `kyojin` | EXL3 pack | Native slots + gateway requests |
+| DwarfStar (ds4) | `dwarfstar` | GGUF | Gateway requests only |
+| Gufo | `gufo` | GGUF, optionally with DFlash2 companions | Native slots + gateway requests |
+| Lucebox | `lucebox` | DeepSeek V4 GGUF without a draft | Gateway requests only |
+| ds4a (ds4fa fork) | `ds4a` | DeepSeek V4 Flash GGUF + native DSpark support GGUF | Gateway requests only |
+
+**ds4 and ds4a remain separate options.** The existing ds4 entry retains its `dwarfstar` ID and launch configuration. The `ds4a` entry uses the ds4fa fork and its own executable path, backend port and model ID.
+
+Lucebox and ds4a model examples are disabled until configured. Their profiles offer 4K, 8K, 16K, 32K, 64K and 128K context selections, with a 32K default. These capacities are administrator declarations; validate memory fit and model compatibility on the target hardware. The ds4a profile requires a compatible native DSpark companion file; Lucebox's example runs without a draft.
+
+Install the selected engines and weights independently, then edit paths, model IDs and approved model roots in the private host configuration. Registering a model does not load it: select the engine and explicitly load the model before inference. Gateway-only occupancy tracks requests through IGM and does not verify native idle; route all inference through the gateway.
+
+See [Lucebox and ds4a integration](docs/lucebox-ds4a.md) for launch profiles, DSpark artifacts, process matching and acceptance steps, and [Kyojin integration](docs/kyojin.md) for EXL3 setup and ROCm requirements. Updating the source example does not update an installed gateway's private configuration or reload its process.
 
 ## LAN security
 
@@ -101,7 +119,7 @@ Authenticate `/api/*` with the control credential using the `Authorization` head
 
 Add `X-Client-Name` to label requests. Model IDs must match the currently loaded gateway model. Selecting a model in a coding client's picker **does not automatically switch the engine**. The optional MCP controller or an HTTP controller calls control APIs first. Controllers can send `X-IGM-Selection-ID` from status/load to refuse stale settings. HTTP 409 means busy/invalid lifecycle (including unknown native occupancy on a non-force stop); inference uses 503 for unknown occupancy, and startup or shutdown failures also use 503; 401/403 means credential/role rejection. Startup may take several minutes; `/api/status` remains available while loading. A force-cancelled loader receives 409 and unload retains the selected engine without a startup-error message. Inference JSON must contain finite numbers and at most 128 nesting levels (invalid payloads return 400).
 
-llama.cpp, Strata, Kyojin and Gufo use native `/slots` in addition to tracked requests. DwarfStar currently uses `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
+llama.cpp, Strata, Kyojin and Gufo use native `/slots` in addition to tracked requests. DwarfStar (ds4), Lucebox and ds4a use `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
 
 ## Clients
 
