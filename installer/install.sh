@@ -1,198 +1,171 @@
 #!/usr/bin/env bash
-# Interactive installer for Inference Gateway Manager.
-# Run from the repository root: bash installer/install.sh
+# Fresh Linux host setup. Does not install engines, download weights or use sudo.
 set -euo pipefail
-
+umask 077
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL_DIR="${IGM_INSTALL_DIR:-/opt/inference-gateway-manager}"
-SERVICE_USER="${IGM_SERVICE_USER:-${USER:-$(id -un)}}"
-SERVICE_NAME="inference-gateway-manager.service"
-MODELS_DIR=""
-VENV_DIR="$INSTALL_DIR/.venv"
-STATE_DIR="$INSTALL_DIR/.local/state"
-CREDS_FILE="$INSTALL_DIR/.local/credentials.env"
-CONFIG_FILE="$INSTALL_DIR/config.local.json"
-
-say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
-ask() { # ask "prompt" default -> sets ANSWER
-  local prompt="$1" default="$2" reply
-  read -r -p "$prompt [$default] " reply || true
-  ANSWER="${reply:-$default}"
+INSTALL_DIR="${IGM_INSTALL_DIR:-$HOME/.local/share/inference-gateway-manager}"
+SERVICE_NAME=inference-gateway-manager.service
+say() { printf '\n==> %s\n' "$*"; }
+ask() {
+  local reply
+  read -r -p "$1 [$2] " reply || { echo "Input ended; installation cancelled." >&2; exit 1; }
+  ANSWER="${reply:-$2}"
 }
-ask_yes_no() { # sets ANSWER=yes/no
-  local prompt="$1" default="${2:-no}" reply
+ask_yes_no() {
   while true; do
-    read -r -p "$prompt (y/n) [$default] " reply || reply="$default"
-    case "${reply:-$default}" in
+    ask "$1 (y/n)" "${2:-no}"
+    case "$ANSWER" in
       y|Y|yes|YES) ANSWER=yes; return ;;
       n|N|no|NO) ANSWER=no; return ;;
     esac
   done
 }
-
 [[ $EUID -ne 0 ]] || { echo "Run as the unprivileged engine-owning user, not root." >&2; exit 1; }
-command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
-  || { echo "Python 3.11+ is required" >&2; exit 1; }
-[[ -f "$REPO_ROOT/examples/config.example.json" ]] || { echo "Run from a full repository checkout" >&2; exit 1; }
-
-say "Inference Gateway Manager installer"
-echo "Repository: $REPO_ROOT"
-echo "Install target: $INSTALL_DIR"
-
+[[ $(uname -s) == Linux ]] || { echo "The inference host requires Linux." >&2; exit 1; }
+command -v python3 >/dev/null || { echo "Python 3.11+ is required." >&2; exit 1; }
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)'
+say "Fresh Inference Gateway Manager installation"
+echo "Engines and weights are installed separately. Existing installations are never overwritten."
 ask "Install directory" "$INSTALL_DIR"; INSTALL_DIR="$ANSWER"
+# Normalize before deriving any paths. The helper also rejects unsafe unit paths.
+INSTALL_DIR="$(python3 -c 'import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from setup_files import validate_path; print(validate_path(sys.argv[2]))' "$REPO_ROOT/installer" "$INSTALL_DIR")"
+python3 "$REPO_ROOT/installer/setup_files.py" check --source "$REPO_ROOT" --target "$INSTALL_DIR"
 VENV_DIR="$INSTALL_DIR/.venv"
-STATE_DIR="$INSTALL_DIR/.local/state"
 CREDS_FILE="$INSTALL_DIR/.local/credentials.env"
 CONFIG_FILE="$INSTALL_DIR/config.local.json"
+STATE_DIR="$INSTALL_DIR/.local/state"
 
-if [[ -d "$INSTALL_DIR/.local" || -f "$CONFIG_FILE" ]]; then
-  ask_yes_no "$INSTALL_DIR already contains an installation. Reconfigure in place (keeps keys, state and config you keep)?" "no"
-  [[ "$ANSWER" == yes ]] || { echo "Aborting to avoid overwriting an existing installation." >&2; exit 1; }
-fi
-
-# 1. Engine selection
-ALL_ENGINES=(llama strata kyojin dwarfstar gufo)
-say "Engine selection"
-echo "Available engines:"
+say "Engine selections"
+ENGINE_LIST="$(python3 "$REPO_ROOT/installer/generate_config.py" --list-engines)"
+mapfile -t ALL_ENGINES <<< "$ENGINE_LIST"
 printf '  %s\n' "${ALL_ENGINES[@]}"
-read -r -p "Engines to configure (comma-separated, 'all', or empty for interactive prompts): " ENGINE_INPUT || ENGINE_INPUT=""
+echo "ds4 keeps its dwarfstar ID; ds4a is the separate ds4fa fork."
+ask "Engines (comma-separated IDs, all, or empty to choose individually)" ""
+ENGINE_INPUT="$ANSWER"
 SELECTED=()
 if [[ "$ENGINE_INPUT" == all || "$ENGINE_INPUT" == ALL ]]; then
   SELECTED=("${ALL_ENGINES[@]}")
-else
+elif [[ -n "$ENGINE_INPUT" ]]; then
   IFS=',' read -ra TOKENS <<< "$ENGINE_INPUT"
-  if [[ ${#TOKENS[@]} -gt 0 && -n "${TOKENS[0]:-}" ]]; then
-    for token in "${TOKENS[@]}"; do
-      token="$(echo "$token" | xargs)"
-      [[ " ${ALL_ENGINES[*]} " == *" $token "* ]] || { echo "Unknown engine: $token" >&2; exit 1; }
-      SELECTED+=("$token")
-    done
-  else
-    for engine in "${ALL_ENGINES[@]}"; do
-      ask_yes_no "Configure $engine?" "no"
-      [[ "$ANSWER" == yes ]] && SELECTED+=("$engine")
-    done
-    [[ ${#SELECTED[@]} -gt 0 ]] || { echo "At least one engine must be selected." >&2; exit 1; }
-  fi
+  for token in "${TOKENS[@]}"; do
+    token="${token//[[:space:]]/}"
+    [[ -n "$token" && " ${ALL_ENGINES[*]} " == *" $token "* ]] || { echo "Unknown engine: $token" >&2; exit 1; }
+    SELECTED+=("$token")
+  done
+else
+  for engine in "${ALL_ENGINES[@]}"; do
+    ask_yes_no "Configure $engine?" no
+    if [[ "$ANSWER" == yes ]]; then SELECTED+=("$engine"); fi
+  done
 fi
-echo "Selected engines: ${SELECTED[*]}"
+[[ ${#SELECTED[@]} -gt 0 ]] || { echo "Select at least one engine." >&2; exit 1; }
+ask "Models directory (created after confirmation)" "$HOME/models"; MODELS_DIR="$ANSWER"
+MODELS_DIR="$(python3 -c 'import sys; from pathlib import Path; p=Path(sys.argv[1]).expanduser(); assert p.is_absolute(), "Models directory must be absolute"; print(p.resolve())' "$MODELS_DIR")"
+[[ ! -e "$MODELS_DIR" || -d "$MODELS_DIR" ]] || { echo "Models path is not a directory." >&2; exit 1; }
 
-# 2. Models directory
-say "Models directory"
-echo "IGM does not download models; it serves files already on this host."
+say "Gateway access"
+BIND_IP=127.0.0.1
+NETWORK=127.0.0.0/8
+EXTRA_HOST=""
+ask_yes_no "Allow clients on your trusted LAN?" no
+if [[ "$ANSWER" == yes ]]; then
+  command -v ip >/dev/null && ip -brief address show scope global || true
+  ask "Specific private interface IP to bind (no wildcard)" ""; BIND_IP="$ANSWER"
+  ask "Allowed client subnet in CIDR notation (must include that IP)" ""; NETWORK="$ANSWER"
+  ask "Additional gateway hostname clients will use (optional, no URL or port)" ""; EXTRA_HOST="$ANSWER"
+fi
+
+say "Startup and recovery"
+echo "Choose none for manual startup, user for a user service, or system for prepared administrator commands."
+echo "System mode supports boot-before-login and optional recovery; it does not run sudo."
 while true; do
-  ask "Directory where model files live (created if missing)" "/opt/models"
-  MODELS_DIR="$ANSWER"
-  if [[ -e "$MODELS_DIR" && ! -d "$MODELS_DIR" ]]; then
-    echo "$MODELS_DIR exists and is not a directory." >&2
-    continue
-  fi
-  mkdir -p "$MODELS_DIR" 2>/dev/null || { echo "Cannot create $MODELS_DIR (need write permission)." >&2; exit 1; }
-  break
+  ask "Service mode: none, user, system" none
+  SERVICE_MODE="$ANSWER"
+  [[ "$SERVICE_MODE" == none || "$SERVICE_MODE" == user || "$SERVICE_MODE" == system ]] && break
 done
-
-# 3. Recovery options
-say "Recovery options"
-echo "Both controls are opt-in, control-credential only, and confirm the exact action."
-ask_yes_no "Expose gateway restart?" "no"; RESTART_GATEWAY="$ANSWER"
-ask_yes_no "Expose host reboot (requires additional sudo setup per docs/recovery.md)?" "no"; REBOOT_HOST="$ANSWER"
-
-# 4. MCP
-say "Remote MCP adapter"
-echo "The MCP adapter runs on client computers, not this host; this only installs the optional mcp extra."
-ask_yes_no "Install the optional mcp Python extra (igm-mcp)?" "no"; INSTALL_MCP="$ANSWER"
-
-# 5. System service / boot
-say "Boot behaviour"
-ask_yes_no "Install a systemd user service and enable it to start on power-on?" "yes"; INSTALL_SERVICE="$ANSWER"
-
-# Summary
-say "Summary"
-echo "  Install dir:    $INSTALL_DIR"
-echo "  Models dir:     $MODELS_DIR"
-echo "  Engines:        ${SELECTED[*]}"
-echo "  Gateway restart: $RESTART_GATEWAY"
-echo "  Host reboot:    $REBOOT_HOST"
-echo "  MCP extra:      $INSTALL_MCP"
-echo "  Boot service:  $INSTALL_SERVICE (user service as '$SERVICE_USER')"
-ask_yes_no "Proceed with installation?" "yes"
-[[ "$ANSWER" == yes ]] || { echo "Aborted." >&2; exit 1; }
-
-# Install
-say "Installing files to $INSTALL_DIR"
-if [[ "$(cd "$REPO_ROOT" && pwd)" != "$(cd "$INSTALL_DIR" && pwd)" ]]; then
-  mkdir -p "$INSTALL_DIR"
-  if command -v rsync >/dev/null; then
-    rsync -a --exclude .git --exclude .venv --exclude .local --exclude .pytest_cache \
-          "$REPO_ROOT"/ "$INSTALL_DIR"/
-  else
-    cp -a "$REPO_ROOT"/. "$INSTALL_DIR"/
-    rm -rf "$INSTALL_DIR/.git" "$INSTALL_DIR/.venv" "$INSTALL_DIR/.local" "$INSTALL_DIR/.pytest_cache"
-  fi
+RESTART_GATEWAY=no
+REBOOT_HOST=no
+if [[ "$SERVICE_MODE" == system ]]; then
+  echo "Recovery also requires the root-owned helper and exact sudoers permissions in docs/recovery.md."
+  ask_yes_no "Configure gateway restart capability (requires administrator setup)?" no; RESTART_GATEWAY="$ANSWER"
+  ask_yes_no "Configure host reboot capability (interrupts every host workload)?" no; REBOOT_HOST="$ANSWER"
+else
+  echo "Recovery API controls stay disabled; they require a system service and administrator setup."
 fi
-mkdir -p "$INSTALL_DIR/examples"
+UNIT_FILE="$INSTALL_DIR/.local/$SERVICE_NAME"
+if [[ "$SERVICE_MODE" == user ]]; then
+  USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  USER_UNIT="$USER_UNIT_DIR/$SERVICE_NAME"
+  [[ ! -e "$USER_UNIT" && ! -L "$USER_UNIT" ]] || { echo "Existing user unit; refusing to overwrite it." >&2; exit 1; }
+fi
+say "Installation summary"
+printf 'Install: %s\nModels: %s\nEngines: %s\nBind IP: %s\nAllowed network: %s\nService: %s\nGateway restart: %s\nHost reboot: %s\n' \
+  "$INSTALL_DIR" "$MODELS_DIR" "${SELECTED[*]}" "$BIND_IP" "$NETWORK" "$SERVICE_MODE" "$RESTART_GATEWAY" "$REBOOT_HOST"
+printf 'Additional allowed host: %s\n' "${EXTRA_HOST:-none}"
+echo "All example models stay disabled. Configure installed engine paths, register weights, then explicitly load."
+echo "MCP belongs on a separate client computer; no host MCP extra is installed."
+ask_yes_no "Proceed with installation?" no
+[[ "$ANSWER" == yes ]] || { echo "Cancelled."; exit 0; }
 
-say "Creating virtual environment and installing the gateway"
+# Validate all proposed config values before touching destination files or installing dependencies.
+python3 - "$REPO_ROOT" "$MODELS_DIR" "$BIND_IP" "$NETWORK" "$RESTART_GATEWAY" "$REBOOT_HOST" "$EXTRA_HOST" "${SELECTED[@]}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from installer.generate_config import validate_inputs
+try:
+    validate_inputs(sys.argv[8:], sys.argv[2], sys.argv[3], sys.argv[4], [sys.argv[7]] if sys.argv[7] else [])
+except ValueError as error:
+    raise SystemExit(str(error))
+PY
+say "Installing public files and gateway dependencies"
+python3 "$REPO_ROOT/installer/setup_files.py" copy --source "$REPO_ROOT" --target "$INSTALL_DIR"
+mkdir -p "$MODELS_DIR"
 python3 -m venv "$VENV_DIR"
-if [[ "$INSTALL_MCP" == yes ]]; then
-  "$VENV_DIR/bin/pip" install --upgrade pip
-  "$VENV_DIR/bin/pip" install "$INSTALL_DIR[mcp]"
-else
-  "$VENV_DIR/bin/pip" install --upgrade pip
-  "$VENV_DIR/bin/pip" install "$INSTALL_DIR"
-fi
-
-say "Generating configuration"
-CONFIG_ARGS=(--output "$CONFIG_FILE" --models-dir "$MODELS_DIR")
+"$VENV_DIR/bin/python" -m pip install "$INSTALL_DIR"
+CONFIG_ARGS=(--output "$CONFIG_FILE" --models-dir "$MODELS_DIR" --host "$BIND_IP" --allowed-network "$NETWORK")
+if [[ -n "$EXTRA_HOST" ]]; then CONFIG_ARGS+=(--allowed-host "$EXTRA_HOST"); fi
 for engine in "${SELECTED[@]}"; do CONFIG_ARGS+=(--engine "$engine"); done
-[[ "$RESTART_GATEWAY" == yes ]] && CONFIG_ARGS+=(--restart-gateway)
-[[ "$REBOOT_HOST" == yes ]] && CONFIG_ARGS+=(--reboot-host)
-cd "$INSTALL_DIR"
-"$VENV_DIR/bin/python" installer/generate_config.py "${CONFIG_ARGS[@]}"
-
-say "Generating credentials"
-if [[ -f "$CREDS_FILE" ]]; then
-  echo "Keeping existing $CREDS_FILE"
-else
-  mkdir -p "$INSTALL_DIR/.local"
-  "$VENV_DIR/bin/python" -m gateway init-keys --output "$CREDS_FILE"
-fi
+if [[ "$RESTART_GATEWAY" == yes ]]; then CONFIG_ARGS+=(--restart-gateway); fi
+if [[ "$REBOOT_HOST" == yes ]]; then CONFIG_ARGS+=(--reboot-host); fi
+"$VENV_DIR/bin/python" "$INSTALL_DIR/installer/generate_config.py" "${CONFIG_ARGS[@]}"
+"$VENV_DIR/bin/python" -m gateway init-keys --output "$CREDS_FILE"
 mkdir -p "$STATE_DIR"
 
-# Systemd user service
-if [[ "$INSTALL_SERVICE" == yes ]]; then
-  say "Installing systemd user service"
-  UNIT_SRC="$INSTALL_DIR/examples/inference-gateway-manager.service"
-  UNIT_DIR="$HOME/.config/systemd/user"
-  UNIT_FILE="$UNIT_DIR/$SERVICE_NAME"
-  mkdir -p "$UNIT_DIR"
-  sed -e "s|/opt/inference-gateway-manager|$INSTALL_DIR|g" "$UNIT_SRC" > "$UNIT_FILE"
-  systemctl --user daemon-reload
-  systemctl --user enable "$SERVICE_NAME"
-  echo "Enabled $SERVICE_NAME (user)."
-  if ! loginctl show-user "$SERVICE_USER" 2>/dev/null | grep -q '^Linger=yes'; then
-    echo "Note: to start at power-on without an interactive login, run:"
-    echo "  sudo loginctl enable-linger $SERVICE_USER"
+if [[ "$SERVICE_MODE" != none ]]; then
+  UNIT_ARGS=()
+  if [[ "$SERVICE_MODE" == system ]]; then UNIT_ARGS+=(--system); fi
+  python3 "$INSTALL_DIR/installer/setup_files.py" unit --source "$INSTALL_DIR" --target "$INSTALL_DIR" --output "$UNIT_FILE" "${UNIT_ARGS[@]}"
+  if [[ "$SERVICE_MODE" == user ]]; then
+    mkdir -p "$USER_UNIT_DIR"
+    # Exclusive creation refuses a unit that appeared after the initial check.
+    python3 - "$UNIT_FILE" "$USER_UNIT" <<'PY'
+import sys
+from pathlib import Path
+with Path(sys.argv[2]).open('x') as output:
+    output.write(Path(sys.argv[1]).read_text())
+PY
+    systemctl --user daemon-reload
+    systemctl --user enable "$SERVICE_NAME"
+    echo "User unit enabled, not started. For boot without login, an administrator can run:"
+    printf '  sudo loginctl enable-linger %q\n' "$(id -un)"
+    printf 'After reviewing the config, start with: systemctl --user start %q\n' "$SERVICE_NAME"
+  else
+    echo "Prepared a system unit running as the current unprivileged account. Administrator commands:"
+    printf '  sudo install -m 0644 %q /etc/systemd/system/%q\n' "$UNIT_FILE" "$SERVICE_NAME"
+    echo "  sudo systemctl daemon-reload"
+    printf '  sudo systemctl enable %q\n' "$SERVICE_NAME"
+    echo "After reviewing config, storage available before login, permissions and conflicting services:"
+    printf '  sudo systemctl start %q\n' "$SERVICE_NAME"
+    echo "Recovery helper/sudoers setup is separate: docs/recovery.md. Do not run both system and user units."
   fi
-  ask_yes_no "Start the gateway service now?" "yes"
-  if [[ "$ANSWER" == yes ]]; then
-    systemctl --user start "$SERVICE_NAME"
-    systemctl --user --no-pager status "$SERVICE_NAME" || true
-  fi
-else
-  say "Skipping service installation"
-  echo "Start manually with:"
-  echo "  set -a; . $CREDS_FILE; set +a"
-  echo "  $VENV_DIR/bin/python -m gateway serve --config $CONFIG_FILE --state-dir $STATE_DIR"
 fi
-
 say "Next steps"
-echo "  1. Edit $CONFIG_FILE to set real engine paths, argv, model names and LAN access."
-echo "  2. Review $CREDS_FILE (owner-only readable) for control/inference keys."
-echo "  3. Copy your model files into $MODELS_DIR."
-echo "  4. LAN use: bind a specific interface address, allowed_hosts and allowed_networks per README."
-if [[ "$REBOOT_HOST" == yes ]]; then
-  echo "  5. Host reboot needs the sudo helper from docs/recovery.md before it will work."
-fi
-echo "Dashboard: http://127.0.0.1:9000/"
+printf 'Configuration: %s\nPrivate keys: %s\n' "$CONFIG_FILE" "$CREDS_FILE"
+echo "Review executable paths and model artifacts; register compatible weights in the dashboard."
+echo "The control key manages lifecycle; give inference clients only the inference key. Never share the credential file."
+if [[ "$BIND_IP" == *:* ]]; then ORIGIN="http://[$BIND_IP]:9000"; else ORIGIN="http://$BIND_IP:9000"; fi
+printf 'Dashboard and MCP gateway URL: %s\nInference API base URL: %s/v1\n' "$ORIGIN" "$ORIGIN"
+echo "Set up MCP on a separate client computer using docs/mcp-registration.md."
+echo "Manual start (use only when no service owns this gateway):"
+printf '  set -a; . %q; set +a\n' "$CREDS_FILE"
+printf '  %q -m gateway serve --config %q --state-dir %q\n' "$VENV_DIR/bin/python" "$CONFIG_FILE" "$STATE_DIR"

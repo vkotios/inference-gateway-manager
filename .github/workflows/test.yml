@@ -14,8 +14,8 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: python -m playwright install --with-deps chromium
       - run: pytest -q
-      - run: ruff check gateway tests
-      - run: ruff format --check gateway tests
+      - run: ruff check gateway tests installer
+      - run: ruff format --check gateway tests installer
       - run: python -m build
       - run: node --check gateway/static/app.js
   portable-client:
