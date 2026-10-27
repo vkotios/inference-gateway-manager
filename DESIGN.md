@@ -81,7 +81,7 @@ No new animation. Respect reduced motion. Telemetry updates without transition e
 
 ## Content
 
-Sentence case, concrete verbs and truthful unknown states. Distinguish selected context capacity from active/native readback. Explain local-server paths, the inspection boundary, fixed capabilities and administrator setup. Adding a model never implies loading it.
+Sentence case, concrete verbs and truthful unknown states. Distinguish selected context capacity from active/native readback. Explain local-server paths, the inspection boundary, fixed capabilities and administrator setup. Adding a model never implies loading it. Engine update controls reuse the same disclosure, form, confirmation and status patterns. Checking/staging never requests a model load; activation names the authorized test selection. Public diagnostic drafts are editable and require separate GitHub submission.
 
 ## Accessibility
 

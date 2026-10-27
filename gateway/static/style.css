@@ -3,3 +3,5 @@
 .check input{flex:0 0 16px;width:16px;height:16px;padding:0;min-width:16px}
 .settings>div{display:grid;gap:9px}.settings>div label{display:block}
 header>.badge{flex-shrink:0;max-width:none;white-space:nowrap}
+
+#updates-panel[open] summary{margin-bottom:18px}#updates-controls{display:grid;gap:12px;margin:16px 0;padding:16px;border:1px solid #3c4752;border-radius:6px}#updates-controls label{display:grid;gap:8px}#updates-controls .check{display:flex}#updates-report-body{display:block;box-sizing:border-box;width:100%;max-width:100%;padding:12px;background:#101419;color:#e1e6ed;border:1px solid #3c4752;border-radius:6px;font:13px ui-monospace,monospace}#updates-status,#updates-tests{overflow-wrap:anywhere}#updates-report-link{display:inline-block;margin-top:12px}

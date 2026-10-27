@@ -56,7 +56,24 @@ def main():
     recovery.add_argument(
         "--confirm", required=True, help="Repeat the exact action; interrupts work"
     )
+    update_recovery = commands.add_parser(
+        "rollback-engine-config",
+        help="Offline recovery: restore saved engine configuration while gateway is stopped",
+    )
+    update_recovery.add_argument("--state-dir", required=True)
+    update_recovery.add_argument("--engine", required=True)
     args = parser.parse_args()
+    if args.command == "rollback-engine-config":
+        from .updates import offline_rollback
+
+        try:
+            offline_rollback(args.state_dir, args.engine)
+        except (ValueError, OSError, KeyError) as error:
+            parser.exit(1, str(error) + "\n")
+        print(
+            "Configuration restored. Start the gateway unloaded, then authorize rollback verification."
+        )
+        return
     if args.command == "set-password":
         import getpass
 
