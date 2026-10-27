@@ -39,6 +39,15 @@
     },
     {
       "exe": "gufo-server"
+    },
+    {
+      "exe": "luce_server"
+    },
+    {
+      "exe": "ds4a-server"
+    },
+    {
+      "exe": "ds4fa-server"
     }
   ],
   "engines": {
@@ -722,6 +731,180 @@
               "kind": "file",
               "format": "gguf"
             },
+            "draft": {
+              "kind": "file",
+              "format": "gguf"
+            }
+          }
+        }
+      }
+    },
+    "lucebox": {
+      "label": "Lucebox",
+      "models": {
+        "example-lucebox": {
+          "argv": [
+            "/opt/lucebox/server/build/luce_server",
+            "/opt/models/deepseek-rocmfpx.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8084",
+            "--max-ctx",
+            "{context}",
+            "--model-name",
+            "example-lucebox",
+            "--max-concurrency",
+            "1"
+          ],
+          "base_url": "http://127.0.0.1:8084",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "env": {
+            "LUCE_DS4_SPEC": "0"
+          },
+          "enabled": false
+        }
+      },
+      "profiles": {
+        "gguf": {
+          "argv": [
+            "/opt/lucebox/server/build/luce_server",
+            "{path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8084",
+            "--max-ctx",
+            "{context}",
+            "--model-name",
+            "{model}",
+            "--max-concurrency",
+            "1"
+          ],
+          "base_url": "http://127.0.0.1:8084",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "env": {
+            "LUCE_DS4_SPEC": "0"
+          },
+          "format": "gguf",
+          "label": "DeepSeek V4 GGUF without draft",
+          "supported_architectures": [
+            "deepseek4"
+          ]
+        }
+      }
+    },
+    "ds4a": {
+      "label": "ds4a (ds4fa)",
+      "models": {
+        "example-ds4a": {
+          "argv": [
+            "/opt/ds4a/ds4-server",
+            "-m",
+            "/opt/models/deepseek-rocmfpx.gguf",
+            "--rocm",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8085",
+            "--ctx",
+            "{context}",
+            "--mtp",
+            "/opt/models/deepseek-dspark.gguf",
+            "--dspark"
+          ],
+          "base_url": "http://127.0.0.1:8085",
+          "context": 32768,
+          "upstream_model": "deepseek-v4-flash",
+          "ready_path": "/v1/models",
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "enabled": false
+        }
+      },
+      "profiles": {
+        "dspark-gguf": {
+          "argv": [
+            "/opt/ds4a/ds4-server",
+            "-m",
+            "{path}",
+            "--rocm",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8085",
+            "--ctx",
+            "{context}",
+            "--mtp",
+            "{artifact.draft}",
+            "--dspark"
+          ],
+          "base_url": "http://127.0.0.1:8085",
+          "context": 32768,
+          "upstream_model": "deepseek-v4-flash",
+          "ready_path": "/v1/models",
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          },
+          "format": "gguf",
+          "label": "DeepSeek V4 Flash GGUF + native DSpark support GGUF",
+          "supported_architectures": [
+            "deepseek4"
+          ],
+          "artifacts": {
             "draft": {
               "kind": "file",
               "format": "gguf"

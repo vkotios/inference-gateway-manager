@@ -83,7 +83,7 @@ This is an operator walkthrough, not an implementation of locking, retry policy 
 - **`force:true` requires explicit authority to interrupt the affected work.** It can cancel active inference or loading and stop the engine. Force does not grant ownership of unmanaged processes.
 - If selection succeeds but loading fails, do not claim the prior model was restored. Inspect the actual state.
 - A cancelled/lost client request can produce partial work. Neither lifecycle nor inference calls have a documented idempotency-key guarantee.
-- DwarfStar's `gateway_only` occupancy measures proxy activity, not verified native-slot idle. Route all inference through IGM; direct loopback callers bypass that measurement.
+- DwarfStar (ds4), Lucebox and ds4a `gateway_only` occupancy measures proxy activity, not verified native-slot idle. Route all inference through IGM; direct loopback callers bypass that measurement.
 - Recovery APIs/CLI are separate opt-in administrative features. A skill must not invoke gateway restart or host reboot as routine model switching; see [recovery](recovery.md).
 
 ## Agent skill

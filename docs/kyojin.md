@@ -1,6 +1,6 @@
 # Kyojin integration
 
-IGM treats Kyojin as an administrator-configured native process, using the existing lifecycle, authenticated catalog and transparent inference proxy. The example now offers `llama`, `strata`, `kyojin`, `dwarfstar` and `gufo`; the dashboard renders that catalog dynamically. The gateway runtime needs no engine-specific Python or JavaScript adapter.
+IGM treats Kyojin as an administrator-configured native process, using the existing lifecycle, authenticated catalog and transparent inference proxy. The example now offers `llama`, `strata`, `kyojin`, `dwarfstar`, `gufo`, `lucebox` and `ds4a`; the dashboard renders that catalog dynamically. The gateway runtime needs no engine-specific Python or JavaScript adapter.
 
 ## Supported example
 
@@ -28,11 +28,11 @@ Model IDs must be unique across all engines. Use a suffixed Kyojin ID instead of
 
 Use the normal [controller procedure](orchestration.md), without printing keys:
 
-1. Verify `/api/engines` lists exactly the intended five engines and the enabled Kyojin model. The catalog must not expose paths, argv or environment values.
+1. Verify `/api/engines` lists the intended configured engines and the enabled Kyojin model. The catalog must not expose paths, argv or environment values.
 2. Confirm no active requests or unmanaged native engines; select `kyojin` with `force:false` and read back selection.
 3. Load `qwen3.8-flash-next-kyojin`, allowing the configured startup timeout for initial kernel tuning. Verify `phase: ready`, exact model ID and native-slot occupancy. HTTP availability while `/health` is 503 is not readiness.
 4. Generate non-streamed chat, SSE chat and raw completions through IGM with the inference credential. Validate the actual response and stream termination, not merely HTTP 200. Exercise required tool-call workflows separately.
 5. While generation is active, verify competing inference/lifecycle requests are refused without forcing a stop. If native occupancy cannot be read, do not downgrade to `gateway_only` to hide the problem.
 6. Unload or switch normally; verify the exact native PID/start-time identity exited and no native processes survived. Restore the pre-test selection/model state when required.
 
-Repository tests cover five-engine discovery, sanitized model catalog, configuration-based Kyojin selection, native process conflict detection for all three server families, native-slot lifecycle, fixture SSE forwarding and identity-verified exit. Fixture tests do **not** certify GPU execution. Private real-engine acceptance evidence, runtime library paths and host deployment configuration must remain outside Git. Boot-before-login, a second-device connection and full coding-client endurance are separate acceptance gates.
+Repository tests cover configured-engine discovery, sanitized model catalog, configuration-based Kyojin selection, native process conflict detection for all three server families, native-slot lifecycle, fixture SSE forwarding and identity-verified exit. Fixture tests do **not** certify GPU execution. Private real-engine acceptance evidence, runtime library paths and host deployment configuration must remain outside Git. Boot-before-login, a second-device connection and full coding-client endurance are separate acceptance gates.
