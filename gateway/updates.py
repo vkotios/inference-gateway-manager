@@ -21,6 +21,7 @@ import httpx
 import psutil
 from fastapi import HTTPException
 
+from . import __version__
 from .core import finish_cleanup, identity, signal_identity
 from .settings import apply_reasoning
 
@@ -955,7 +956,7 @@ class Updates:
         # Strict allowlist: no raw logs, exception strings, model IDs, argv,
         # environment, paths, hostnames, input/output text or credentials.
         safe = {
-            "gateway_version": "0.1.0",
+            "gateway_version": __version__,
             "engine": record["engine"],
             "action": record["action"],
             "candidate_revision": record["revision"],

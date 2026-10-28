@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, StrictInt
 
+from . import __version__
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
 from .core import Manager, finish_cleanup
 from .maintenance import Maintenance
@@ -200,7 +201,7 @@ def create_app(config, admin_key, inference_key, state_dir):
 
     app = FastAPI(
         title="Inference Gateway Manager",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

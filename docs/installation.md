@@ -3,7 +3,7 @@
 Run `bash installer/install.sh` from a complete repository checkout on the Linux inference host, as the unprivileged account that will own the gateway and engines. Python 3.11+ with venv/pip support is required. Package installation needs access to the Python package index. Engines, ROCm/CUDA dependencies and compatible weights must be installed independently; this installer does not download weights, install or update engines, or alter GPU settings.
 
 ```sh
-git clone https://github.com/vkotios/inference-gateway-manager.git
+git clone --branch v1.0.0 https://github.com/vkotios/inference-gateway-manager.git
 cd inference-gateway-manager
 bash installer/install.sh
 ```
@@ -41,7 +41,7 @@ Service enablement or a `/health` response is not proof of boot-before-login, re
 
 This is a **fresh-install** workflow. A destination with `config.local.json`, `.local` state/keys or a `.venv` is refused before copying or installing packages. The installer does not offer a misleading reconfigure/overwrite prompt, rotate credentials, remove state or restart a live gateway. A separate nonempty target is also refused.
 
-For a manual gateway upgrade, record the installed revision and environment, back up the private config/credentials/state, and prepare a rollback copy. Review release/config changes and test the new package in a separate environment. During authorized idle maintenance, apply the reviewed code/environment change through the actual supervisor, keeping the existing private config and keys; verify authenticated status, catalog and required inference workflows. Restore the previous environment/config if acceptance fails. This PR does not add an automated gateway or engine updater.
+For a manual gateway upgrade, record the installed revision and environment, back up the private config/credentials/state, and prepare a rollback copy. Review release/config changes and test the new package in a separate environment. During authorized idle maintenance, apply the reviewed code/environment change through the actual supervisor, keeping the existing private config and keys; verify authenticated status, catalog and required inference workflows. Restore the previous environment/config if acceptance fails. Gateway package upgrades remain manual. The separate opt-in [engine updater](engine-updates.md) stages engine releases, verifies explicitly authorized model-load/inference tests, and retains rollback snapshots; enroll each engine with an administrator-reviewed recipe.
 
 ## Config generation without installation
 

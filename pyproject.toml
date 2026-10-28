@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 [project]
 name = "inference-gateway-manager"
-version = "0.1.0"
+version = "1.0.0"
 description = "Single-engine Linux inference gateway with LAN control and telemetry"
 authors = [{name = "vkotios"}]
 license = "MIT"
