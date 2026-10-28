@@ -81,3 +81,20 @@ def test_config_rejects_public_backend_and_empty_process_matcher():
     good["native_matchers"] = [{}]
     with pytest.raises(ValueError, match="matcher"):
         validate(good)
+
+
+@pytest.mark.parametrize("value", [True, "guessed", {}, [], 1])
+def test_native_generation_metrics_provider_is_explicit(value):
+    from gateway.config import validate_runtime
+
+    spec = {"argv": ["fixture"], "base_url": "http://127.0.0.1:8011", "generation_metrics": value}
+    with pytest.raises(ValueError, match="generation_metrics"):
+        validate_runtime(spec)
+
+
+def test_lucebox_generation_metrics_provider_is_accepted():
+    from gateway.config import validate_runtime
+
+    validate_runtime(
+        {"argv": ["fixture"], "base_url": "http://127.0.0.1:8011", "generation_metrics": "lucebox"}
+    )

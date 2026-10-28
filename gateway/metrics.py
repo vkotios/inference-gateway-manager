@@ -7,12 +7,16 @@ import time
 MAX_LINE = 1024 * 1024
 MAX_BODY = 4 * 1024 * 1024
 LIVE_MIN_EVENTS = 3
+MIN_ESTIMATE_SECONDS = 0.5
 
 
 def number(value, *, positive=False):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if not math.isfinite(value) or value < 0 or (positive and value == 0):
+    try:
+        if not math.isfinite(value) or value < 0 or (positive and value == 0):
+            return None
+    except OverflowError:
         return None
     return value
 
@@ -113,10 +117,10 @@ class Tap:
         if self.disabled:
             return None
         rate_value = None
-        if self.events >= LIVE_MIN_EVENTS and self.last > self.first:
+        if self.events >= LIVE_MIN_EVENTS and self.last - self.first >= MIN_ESTIMATE_SECONDS:
             rate_value = rate((self.events - 1) / (self.last - self.first))
         return {
-            "state": "generating" if self.events else "prefill",
+            "state": "generating" if self.events else "waiting",
             "elapsed_seconds": round(self.clock() - self.started, 1),
             "tokens": self.events,
             "tokens_per_second": rate_value,
@@ -130,16 +134,25 @@ class Tap:
             return None
         timings = self.timings or {}
         usage = self.usage or {}
+        luce = usage.get("timings")
+        luce = luce if isinstance(luce, dict) else {}
         generation_rate = rate(timings.get("predicted_per_second"))
+        if generation_rate is None:
+            generation_rate = rate(luce.get("decode_tokens_per_sec"))
         tokens = count(timings.get("predicted_n")) if generation_rate else None
         source = "engine" if generation_rate else "estimated"
         if tokens is None:
             tokens = count(usage.get("completion_tokens")) or self.events or None
         span = (self.last - self.first) if self.events >= 2 else 0
-        if generation_rate is None and tokens and tokens > 1 and span > 0:
+        if generation_rate is None and tokens and tokens > 1 and span >= MIN_ESTIMATE_SECONDS:
             generation_rate = rate((tokens - 1) / span)
         processed = count(timings.get("prompt_n"))
+        if processed is None:
+            processed = count(luce.get("prefilled_tokens"))
         prompt_rate = rate(timings.get("prompt_per_second")) if processed else None
+        prefill_ms = number(luce.get("prefill_ms"), positive=True)
+        if prompt_rate is None and processed and prefill_ms:
+            prompt_rate = rate(1000 * processed / prefill_ms)
         prefill_tokens = processed
         if prefill_tokens is None:
             prefill_tokens = count(usage.get("prompt_tokens"))
@@ -152,6 +165,16 @@ class Tap:
                 "accepted": accepted,
                 "acceptance": round(accepted / proposed, 3),
             }
+        if draft is None and usage.get("spec_decode_ran") is True:
+            acceptance = number(usage.get("accept_rate"))
+            if acceptance is not None and acceptance <= 1:
+                draft = {"proposed": None, "accepted": None, "acceptance": round(acceptance, 3)}
+        cached = count(timings.get("cache_n"))
+        if cached is None:
+            cached = count(luce.get("cached_prefix_tokens"))
+        details = usage.get("prompt_tokens_details")
+        if cached is None and isinstance(details, dict):
+            cached = count(details.get("cached_tokens"))
         if not (tokens or generation_rate or prompt_rate):
             return None
         return {
@@ -164,7 +187,7 @@ class Tap:
             "prefill": {
                 "tokens": prefill_tokens,
                 "tokens_per_second": prompt_rate,
-                "cached_tokens": count(timings.get("cache_n")),
+                "cached_tokens": cached,
             },
             "time_to_first_token_seconds": (
                 round(self.first - self.started, 1) if self.first is not None else None

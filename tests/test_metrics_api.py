@@ -26,7 +26,7 @@ EVENTS = [
 REPLY = {"choices": [{"message": {"content": "hi"}}], "timings": TIMINGS}
 
 
-def make_app(tmp_path, delay=0.0):
+def make_app(tmp_path, delay=0.0, native=False):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -48,6 +48,9 @@ def make_app(tmp_path, delay=0.0):
         "upstream_model": "fixture",
         "probe": "slots",
     }
+    if native:
+        spec["generation_metrics"] = "lucebox"
+        spec["argv"] += [f"--native-status={tmp_path / 'native.json'}", "--json-delay=4"]
     config = {
         "engines": {"one": {"models": {"fixture": spec}}},
         "native_matchers": [{"argv_contains": str(tmp_path)}],
@@ -170,5 +173,89 @@ async def test_failed_request_does_not_overwrite_last(tmp_path):
             r = await inference.post("/v1/chat/completions", json=chat(model="other"))
             assert r.status_code == 409
             assert (await admin.get("/api/status")).json()["generation"]["last"] == before
+    finally:
+        await app.state.manager.close()
+
+
+@pytest.mark.asyncio
+async def test_native_phase_is_visible_during_buffered_json_and_timings_are_preserved(tmp_path):
+    from tests.test_lucebox_metrics import USAGE
+
+    native_file = tmp_path / "native.json"
+
+    def set_native(phase, tokens, elapsed):
+        native_file.write_text(
+            json.dumps(
+                {
+                    "phase": phase,
+                    "active_requests": 0,
+                    "current": {
+                        "model": "fixture",
+                        "prompt_tokens": 19013,
+                        "completion_tokens": tokens,
+                        "elapsed_s": elapsed,
+                        "messages": "SECRET-PROMPT",
+                    },
+                }
+            )
+        )
+
+    set_native("prefill", 0, 0)
+    app = make_app(tmp_path, native=True)
+    reply = {"choices": [{"message": {"content": "unchanged"}}], "usage": USAGE}
+    (tmp_path / "reply.json").write_text(json.dumps(reply))
+    try:
+        await load(app)
+        async with client(app, "b") as inference, client(app, "a") as admin:
+            pending = asyncio.create_task(inference.post("/v1/chat/completions", json=chat()))
+            for _ in range(50):
+                if app.state.manager.active:
+                    break
+                await asyncio.sleep(0.01)
+            live = (await admin.get("/api/status")).json()["generation"]["live"]
+            assert live["state"] == "prefill" and live["source"] == "engine"
+            await asyncio.sleep(1.05)
+            set_native("decode", 100, 1)
+            live = (await admin.get("/api/status")).json()["generation"]["live"]
+            assert live["state"] == "generating" and live["tokens"] == 100
+            assert live["tokens_per_second"] is None
+            await asyncio.sleep(1.05)
+            set_native("decode", 120, 2)
+            live = (await admin.get("/api/status")).json()["generation"]["live"]
+            assert live["tokens_per_second"] == 20.0
+            assert "SECRET-PROMPT" not in json.dumps(live)
+            response = await pending
+            assert response.json() == reply
+            last = (await admin.get("/api/status")).json()["generation"]["last"]
+            assert last["source"] == "engine"
+            assert last["generation"]["tokens_per_second"] == 19.3
+            assert last["prefill"]["cached_tokens"] == 17932
+    finally:
+        await app.state.manager.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_request_cannot_receive_a_stale_native_sample(tmp_path, monkeypatch):
+    app = make_app(tmp_path, native=True)
+    (tmp_path / "native.json").write_text("{}")
+    try:
+        await load(app)
+        async with client(app, "b") as inference, client(app, "a") as admin:
+            pending = asyncio.create_task(inference.post("/v1/chat/completions", json=chat()))
+            for _ in range(50):
+                if app.state.manager.active:
+                    break
+                await asyncio.sleep(0.01)
+            # The response finishes while the native read is in flight.
+            from gateway.lucebox_metrics import LuceboxMetrics
+
+            async def late_sample(*args, **kwargs):
+                await pending
+                return {"state": "generating", "tokens": 9999}
+
+            monkeypatch.setattr(LuceboxMetrics, "live", late_sample)
+            state = (await admin.get("/api/status")).json()
+            assert state["active_requests"] == 0
+            assert state["generation"]["live"] is None
     finally:
         await app.state.manager.close()

@@ -25,6 +25,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
+        if self.path == "/status/json" and "native-status" in OPTIONS:
+            return self.reply_json(json.loads(Path(OPTIONS["native-status"]).read_text()))
         self.reply_json(
             [{"id": 0, "is_processing": False, "n_ctx": 4096}]
             if self.path == "/slots"
@@ -34,6 +36,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
         if not body.get("stream"):
+            time.sleep(float(OPTIONS.get("json-delay", 0)))
             return self.reply_json(json.loads(Path(OPTIONS["json-reply"]).read_text()))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

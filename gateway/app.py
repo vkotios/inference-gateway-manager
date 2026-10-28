@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, StrictInt
 from . import __version__
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
 from .core import Manager, finish_cleanup
+from .lucebox_metrics import LuceboxMetrics
 from .maintenance import Maintenance
 from .metrics import Metrics, Tap
 from .registry import Registry
@@ -114,6 +115,7 @@ def create_app(config, admin_key, inference_key, state_dir):
     manager = Manager(config, Path(state_dir))
     updates = Updates(config, Path(state_dir))
     generation = Metrics()
+    lucebox_metrics = LuceboxMetrics()
     maintenance = (
         Maintenance(config["maintenance"], manager.state_dir) if "maintenance" in config else None
     )
@@ -361,6 +363,31 @@ def create_app(config, admin_key, inference_key, state_dir):
     async def status():
         manager.refresh_liveness()
         native = await manager.native_busy()
+        request_taps = [
+            (key, value["tap"]) for key, value in manager.active.items() if "tap" in value
+        ]
+        tap = request_taps[0][1] if request_taps else None
+        metrics = generation.view(tap)
+        if manager.phase == "ready" and len(manager.active) == len(request_taps) == 1:
+            spec = manager.spec()
+            if spec.get("generation_metrics") == "lucebox":
+                request_id, tap = request_taps[0]
+                selection = manager.selection_id
+                models = [manager.model]
+                if spec.get("upstream_model"):
+                    models.append(spec["upstream_model"])
+                live = await lucebox_metrics.live(manager.http, spec["base_url"], tap, models)
+                # A force-stop or completed response may race the read-only poll.
+                if (
+                    selection == manager.selection_id
+                    and len(manager.active) == 1
+                    and manager.active.get(request_id, {}).get("tap") is tap
+                ):
+                    metrics = generation.view(tap)
+                    if live is not None:
+                        metrics["live"] = live
+                else:
+                    metrics = generation.view(None)
         return {
             "update_maintenance": manager.update_blocked,
             "selected_engine": manager.engine,
@@ -391,9 +418,7 @@ def create_app(config, admin_key, inference_key, state_dir):
                 {"pid": p, "start_time": s} for p, s in manager.native_processes()
             ],
             "maintenance": maintenance_view(),
-            "generation": generation.view(
-                next((v["tap"] for v in manager.active.values() if "tap" in v), None)
-            ),
+            "generation": metrics,
         }
 
     @app.get("/api/maintenance")
