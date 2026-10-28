@@ -140,8 +140,9 @@ function chart(id, values, value) {
 function describeGeneration(g) {
   const live = g?.live, last = g?.last, num = (v, d = 1) => Number(v).toLocaleString(undefined, {maximumFractionDigits: d});
   if (live) {
+    if (live.state === "waiting") return `Processing · phase unavailable · ${num(live.elapsed_seconds)} s`;
     if (live.state === "prefill") return `Prefill · waiting for first token · ${num(live.elapsed_seconds)} s`;
-    return `Generating · ${live.tokens_per_second == null ? "measuring" : num(live.tokens_per_second) + " tok/s"} · ${num(live.tokens, 0)} tokens (estimate)`;
+    return `Generating · ${live.tokens_per_second == null ? "measuring" : num(live.tokens_per_second) + " tok/s"} · ${num(live.tokens, 0)} tokens (${live.source === "engine" ? "engine counters" : "estimate"})`;
   }
   if (!last) return "No generation data since the gateway started";
   const parts = [];

@@ -45,8 +45,14 @@ def test_wording_for_every_state():
         describe({"live": {"state": "prefill", "elapsed_seconds": 3.14, "tokens": 0}})
         == "Prefill · waiting for first token · 3.1 s"
     )
+    assert describe({"live": {"state": "waiting", "elapsed_seconds": 12.3}}) == (
+        "Processing · phase unavailable · 12.3 s"
+    )
     live = {"state": "generating", "tokens": 120, "tokens_per_second": 23.44}
     assert describe({"live": live}) == "Generating · 23.4 tok/s · 120 tokens (estimate)"
+    assert describe({"live": {**live, "source": "engine"}}) == (
+        "Generating · 23.4 tok/s · 120 tokens (engine counters)"
+    )
     live["tokens_per_second"] = None
     assert describe({"live": live}) == "Generating · measuring · 120 tokens (estimate)"
     assert describe({"live": None, "last": LAST}) == (

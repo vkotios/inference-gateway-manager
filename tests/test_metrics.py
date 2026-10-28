@@ -110,7 +110,7 @@ def test_reasoning_and_tool_call_deltas_count_as_content():
 def test_live_view_waits_for_three_events():
     tap, clock = make()
     assert tap.live() == {
-        "state": "prefill",
+        "state": "waiting",
         "elapsed_seconds": 0.0,
         "tokens": 0,
         "tokens_per_second": None,

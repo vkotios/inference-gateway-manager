@@ -158,6 +158,8 @@ def validate(config):
 
 
 def validate_runtime(spec):
+    if spec.get("generation_metrics") not in (None, "lucebox"):
+        raise ValueError("generation_metrics must be lucebox when configured")
     try:
         url = urlsplit(spec["base_url"])
         loopback = ipaddress.ip_address(url.hostname).is_loopback
