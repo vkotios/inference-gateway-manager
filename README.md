@@ -39,7 +39,7 @@ For a walkthrough, Windows credentials, a smoke test and status-code troubleshoo
 
 Clone this repository and enter it before running the commands below, or install a published wheel with `pip install PATH_TO_WHEEL` and obtain the example configuration separately. The editable installation below includes development tools; use `pip install .` for a source-based runtime installation without those tools.
 
-Requires Linux with pidfd support, Python 3.11+, and independently installed engines/weights.
+Requires Linux with pidfd support, Python 3.11+, and independently installed engines/weights. For fresh interactive setup with all seven engine choices, models directory, LAN access and optional boot-service/recovery preparation, use the [host installer](docs/installation.md). It keeps example models disabled, preserves existing installations by refusing to overwrite them, and leaves MCP setup on the separate client computer.
 
 ```sh
 git clone https://github.com/vkotios/inference-gateway-manager.git
