@@ -339,3 +339,9 @@ and pass/fail results. Keep credentials and browser-session data out of the evid
    Verify the saved code/config/state rollback procedure in the test environment before
    replacing the production installation. Record any untested engine/client combination
    explicitly; successful fixture or hosted CI runs do not certify those combinations.
+
+### Selection system prompt
+
+The model-load dashboard has an optional **System prompt** field. It is empty by default; it belongs to the loaded selection, remains in memory until that selection is unloaded, and is not persisted across a gateway restart. The control API accepts `system_prompt` on `POST /api/model` (up to 16,384 characters). Omit it when reselecting the same model to retain the current value; send an empty string to clear it. Changing only this field updates future requests without restarting the engine and changes the `selection_id`. A request already admitted keeps its original prompt. The value is visible to authenticated control clients in `active_settings`.
+
+For chat completions the gateway places it before the client's instructions, combining an existing first system message when possible. Responses requests receive it before their `instructions`; Messages requests receive it before their `system` content. Empty prompts leave requests unchanged. A nonempty selection prompt is rejected for raw completions, where there is no safe, standardized system-message format. Set `system_prompt_supported: false` on a model specification to disable the field for backends which do not support it. This is request-level instruction injection; it does not change model weights or native capacity, and backend model templates determine how instructions are interpreted.

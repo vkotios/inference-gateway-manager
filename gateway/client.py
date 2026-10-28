@@ -127,7 +127,7 @@ class GatewayClient:
     async def telemetry(self):
         return await self.request("GET", "/api/telemetry")
 
-    async def load(self, engine, model, *, context=None, reasoning=None):
+    async def load(self, engine, model, *, context=None, reasoning=None, system_prompt=None):
         body = {"engine": model_id(engine), "model": model_id(model), "force": False}
         if context is not None:
             body["context"] = positive_int(context, "context", 10_000_000)
@@ -135,6 +135,14 @@ class GatewayClient:
             if reasoning not in ("auto", "on", "off"):
                 raise ValueError("reasoning must be auto, on or off")
             body["reasoning"] = reasoning
+        if system_prompt is not None:
+            if (
+                not isinstance(system_prompt, str)
+                or len(system_prompt) > 16384
+                or "\0" in system_prompt
+            ):
+                raise ValueError("system_prompt must be text of at most 16384 characters")
+            body["system_prompt"] = system_prompt
         return await self.request("POST", "/api/model", body)
 
     async def unload(self):

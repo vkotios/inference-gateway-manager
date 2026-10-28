@@ -16,7 +16,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from . import __version__
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
@@ -24,7 +24,7 @@ from .core import Manager, finish_cleanup
 from .maintenance import Maintenance
 from .metrics import Metrics, Tap
 from .registry import Registry
-from .settings import apply_reasoning, summary
+from .settings import apply_reasoning, apply_system_prompt, summary
 from .supervision import watchdog
 from .telemetry import telemetry
 from .updates import Updates
@@ -70,6 +70,7 @@ class ModelSelection(Force):
     engine: str | None = None
     context: StrictInt | None = None
     reasoning: str | None = None
+    system_prompt: StrictStr | None = Field(default=None, max_length=16384)
 
 
 class EngineSelection(BaseModel):
@@ -555,6 +556,7 @@ def create_app(config, admin_key, inference_key, state_dir):
                 engine=payload.engine,
                 context=payload.context,
                 reasoning=payload.reasoning,
+                system_prompt=payload.system_prompt,
             )
         except (OSError, RuntimeError, TimeoutError):
             raise HTTPException(503, "Backend startup failed; inspect local engine log") from None
@@ -653,6 +655,9 @@ def create_app(config, admin_key, inference_key, state_dir):
                 raise HTTPException(503, "Native occupancy unknown; inference refused")
             apply_reasoning(
                 body, path, spec, (manager.active_settings or {}).get("reasoning", "auto")
+            )
+            apply_system_prompt(
+                body, path, (manager.active_settings or {}).get("system_prompt", "")
             )
             body["model"] = spec.get("upstream_model", manager.model)
             manager.active[request_id] = {

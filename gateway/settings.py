@@ -24,6 +24,7 @@ def capabilities(spec):
         "context_limits": copy.deepcopy(limits),
         "reasoning_modes": list(spec.get("reasoning_modes", ["auto"])),
         "reasoning_change": spec.get("reasoning_change", "fixed"),
+        "system_prompt_supported": spec.get("system_prompt_supported", True),
     }
 
 
@@ -43,6 +44,8 @@ def summary(model, spec):
 
 
 def validate_capabilities(spec):
+    if type(spec.get("system_prompt_supported", True)) is not bool:
+        raise ValueError("system_prompt_supported must be a boolean")
     context = spec.get("context")
     if context is not None and (type(context) is not int or context <= 0):
         raise ValueError("context must be a positive integer")
@@ -122,7 +125,7 @@ def validate_capabilities(spec):
             raise ValueError("Restart reasoning controls need administrator argv")
 
 
-def select(spec, context=None, reasoning=None):
+def select(spec, context=None, reasoning=None, system_prompt=None):
     try:
         validate_capabilities(spec)
     except (ValueError, TypeError, KeyError) as exc:
@@ -141,6 +144,12 @@ def select(spec, context=None, reasoning=None):
     reasoning = spec.get("reasoning", "auto") if reasoning is None else reasoning
     if reasoning not in caps["reasoning_modes"]:
         raise HTTPException(422, "Reasoning mode is not supported by this model")
+    if system_prompt is None:
+        system_prompt = ""
+    if not isinstance(system_prompt, str) or len(system_prompt) > 16384 or "\0" in system_prompt:
+        raise HTTPException(422, "System prompt must be text of at most 16384 characters")
+    if system_prompt and not caps["system_prompt_supported"]:
+        raise HTTPException(422, "System prompt is not supported by this model")
     chosen = copy.deepcopy(spec)
     chosen["argv"] = [a.replace("{context}", str(requested_context)) for a in chosen["argv"]]
     chosen["argv"].extend(chosen.get("reasoning_argv", {}).get(reasoning, []))
@@ -157,7 +166,50 @@ def select(spec, context=None, reasoning=None):
             return value
 
         chosen["config_template"] = render(chosen["config_template"])
-    return chosen, {"context": requested_context, "reasoning": reasoning}
+    return chosen, {
+        "context": requested_context,
+        "reasoning": reasoning,
+        "system_prompt": system_prompt,
+    }
+
+
+def apply_system_prompt(body, path, system_prompt):
+    """Add the selected instruction without dropping the client's instructions."""
+    if not system_prompt:
+        return body
+    if path == "/v1/chat/completions":
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            raise HTTPException(400, "messages must be an array when a system prompt is selected")
+        # Combining the first system message preserves templates which accept only one.
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            content = messages[0].get("content")
+            if isinstance(content, str):
+                messages[0]["content"] = system_prompt + "\n\n" + content
+            elif isinstance(content, list):
+                messages[0]["content"] = [{"type": "text", "text": system_prompt}, *content]
+            else:
+                raise HTTPException(400, "Unsupported system message content")
+        else:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+    elif path == "/v1/responses":
+        instructions = body.get("instructions")
+        if instructions is not None and not isinstance(instructions, str):
+            raise HTTPException(400, "instructions must be text when a system prompt is selected")
+        body["instructions"] = system_prompt + ("\n\n" + instructions if instructions else "")
+    elif path == "/v1/messages":
+        existing = body.get("system")
+        if existing is None:
+            body["system"] = system_prompt
+        elif isinstance(existing, str):
+            body["system"] = system_prompt + "\n\n" + existing
+        elif isinstance(existing, list):
+            body["system"] = [{"type": "text", "text": system_prompt}, *existing]
+        else:
+            raise HTTPException(400, "Unsupported system message content")
+    else:
+        raise HTTPException(422, "System prompts are not supported on this endpoint")
+    return body
 
 
 def apply_reasoning(body, path, spec, mode):

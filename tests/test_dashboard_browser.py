@@ -271,6 +271,7 @@ async def test_capabilities_payload_and_expiry(browser_page, live_gateway):
         "engine": "one",
         "context": 8192,
         "reasoning": "off",
+        "system_prompt": "",
         "force": False,
     }
     assert payload[3]["x-csrf-token"] == "csrf"
@@ -569,3 +570,31 @@ async def test_update_authorization_and_reviewable_public_report(browser_page, l
     assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     await page.get_by_role("button", name="Sign out", exact=True).click()
     await expect(page.locator("#updates-report-body")).to_have_value("")
+
+
+async def test_system_prompt_is_optional_preserved_and_sent_on_load(browser_page, live_gateway):
+    page = browser_page
+    api = await mocked_dashboard(page, live_gateway[0])
+    await login(page)
+    await page.locator("#model").select_option("fixture")
+    await expect(page.locator("#system-prompt")).to_have_value("")
+    await page.locator("#system-prompt").fill("Answer concisely.")
+    await page.evaluate("poll()")
+    await page.get_by_role("button", name="Refresh models", exact=True).click()
+    await expect(page.locator("#system-prompt")).to_have_value("Answer concisely.")
+    await page.get_by_role("button", name="Load model", exact=True).click()
+    await expect(page.locator("#notice")).to_have_text("Lifecycle action completed.")
+    assert [r for r in api.requests if r[1] == "model"][-1][2][
+        "system_prompt"
+    ] == "Answer concisely."
+    api.state["loaded_model"] = "fixture"
+    api.state["active_settings"]["system_prompt"] = "Saved for selection."
+    await page.reload()
+    await expect(page.locator("#system-prompt")).to_have_value("Saved for selection.")
+    api.engines[0]["models"][1]["system_prompt_supported"] = False
+    async with page.expect_response("**/api/engines"):
+        await page.get_by_role("button", name="Refresh models", exact=True).click()
+    await expect(page.locator("#notice")).to_contain_text("Model catalog refreshed")
+    await page.locator("#model").select_option("fixed")
+    await expect(page.locator("#system-prompt")).to_be_disabled()
+    await expect(page.locator("#system-prompt")).to_have_value("")

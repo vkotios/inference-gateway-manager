@@ -336,17 +336,26 @@ class Manager:
         async with self.lock:
             await self._stop(force)
 
-    async def load_model(self, model, force=False, *, engine=None, context=None, reasoning=None):
+    async def load_model(
+        self, model, force=False, *, engine=None, context=None, reasoning=None, system_prompt=None
+    ):
         self.check_update()
         # Invalid force requests must never cancel another in-flight load.
-        self.prepare_model(model, engine, context, reasoning)
+        self.prepare_model(model, engine, context, reasoning, system_prompt)
         await self.interrupt_loading(force)
         if self.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation already running")
         operation = (
             self._load_model(model, force)
-            if engine is None and context is None and reasoning is None
-            else self._load_model(model, force, engine=engine, context=context, reasoning=reasoning)
+            if engine is None and context is None and reasoning is None and system_prompt is None
+            else self._load_model(
+                model,
+                force,
+                engine=engine,
+                context=context,
+                reasoning=reasoning,
+                system_prompt=system_prompt,
+            )
         )
         task = asyncio.create_task(operation)
         self.loading_task = task
@@ -365,7 +374,7 @@ class Manager:
             if self.loading_task is task:
                 self.loading_task = None
 
-    def prepare_model(self, model, engine=None, context=None, reasoning=None):
+    def prepare_model(self, model, engine=None, context=None, reasoning=None, system_prompt=None):
         self.check_update()
         target_engine = engine if engine is not None else self.engine
         if not target_engine:
@@ -394,14 +403,20 @@ class Manager:
                 context = self.selected_settings["context"]
             if reasoning is None:
                 reasoning = self.selected_settings["reasoning"]
-        spec, settings = select(source, context, reasoning)
+            if system_prompt is None:
+                system_prompt = self.selected_settings.get("system_prompt", "")
+        spec, settings = select(source, context, reasoning, system_prompt)
         spec["_argv_template"] = source["argv"]
         return target_engine, spec, settings
 
-    async def _load_model(self, model, force=False, *, engine=None, context=None, reasoning=None):
+    async def _load_model(
+        self, model, force=False, *, engine=None, context=None, reasoning=None, system_prompt=None
+    ):
         async with self.lock:
             self.check_update()
-            target_engine, spec, settings = self.prepare_model(model, engine, context, reasoning)
+            target_engine, spec, settings = self.prepare_model(
+                model, engine, context, reasoning, system_prompt
+            )
             same_model = target_engine == self.engine and model == self.model
             if (
                 same_model
@@ -411,12 +426,13 @@ class Manager:
             ):
                 if settings == self.selected_settings:
                     return
-                if (
-                    settings["context"] == self.selected_settings["context"]
-                    and spec.get("reasoning_change", "fixed") == "request"
+                if settings["context"] == self.selected_settings["context"] and (
+                    settings["reasoning"] == self.selected_settings["reasoning"]
+                    or spec.get("reasoning_change", "fixed") == "request"
                 ):
                     self.selected_settings = settings
                     self.active_settings["reasoning"] = settings["reasoning"]
+                    self.active_settings["system_prompt"] = settings["system_prompt"]
                     self.selection_id = secrets.token_hex(24)
                     return
             self.check_lease()
@@ -431,6 +447,7 @@ class Manager:
                 "requested_context": settings["context"],
                 "context_source": "declared" if settings["context"] is not None else "unknown",
                 "reasoning": settings["reasoning"],
+                "system_prompt": settings["system_prompt"],
             }
             self.selection_id = secrets.token_hex(24)
             self.model = model
