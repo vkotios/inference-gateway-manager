@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, StrictInt
 
+from . import __version__
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
 from .core import Manager, finish_cleanup
 from .maintenance import Maintenance
@@ -26,6 +27,7 @@ from .registry import Registry
 from .settings import apply_reasoning, summary
 from .supervision import watchdog
 from .telemetry import telemetry
+from .updates import Updates
 
 log = logging.getLogger("gateway.app")
 
@@ -76,6 +78,13 @@ class EngineSelection(BaseModel):
     force: bool = False
 
 
+class UpdateAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: str
+    revision: str | None = None
+    test_models: list[str] | None = None
+
+
 class InferenceLifetime:
     """Track the outer ASGI task, including socket drain after generator yield."""
 
@@ -103,6 +112,7 @@ def create_app(config, admin_key, inference_key, state_dir):
     if min(len(admin_key), len(inference_key)) < 32 or admin_key == inference_key:
         raise ValueError("Two different keys of at least 32 characters are required")
     manager = Manager(config, Path(state_dir))
+    updates = Updates(config, Path(state_dir))
     generation = Metrics()
     maintenance = (
         Maintenance(config["maintenance"], manager.state_dir) if "maintenance" in config else None
@@ -186,11 +196,12 @@ def create_app(config, admin_key, inference_key, state_dir):
                 await startup
             except asyncio.CancelledError:
                 pass
+            await updates.close()
             await manager.close()
 
     app = FastAPI(
         title="Inference Gateway Manager",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -203,7 +214,10 @@ def create_app(config, admin_key, inference_key, state_dir):
     install_routes(app, browser_auth, config)
     registry = Registry(config, manager.state_dir)
     app.state.registry = registry
+    app.state.updates = updates
+    updates.attach(manager, registry)
     registry_lock = asyncio.Lock()
+    updates.registry_lock = registry_lock
     recovery_lock = asyncio.Lock()
     recovery_pending = False
 
@@ -218,6 +232,7 @@ def create_app(config, admin_key, inference_key, state_dir):
 
     @app.post("/api/recovery/{action}", status_code=202)
     async def recovery_action(action: str, payload: RecoveryConfirmation):
+        manager.check_update()
         nonlocal recovery_pending
         option = {"restart-gateway": "restart_gateway", "reboot-host": "reboot_host"}.get(action)
         if option is None:
@@ -347,6 +362,7 @@ def create_app(config, admin_key, inference_key, state_dir):
         manager.refresh_liveness()
         native = await manager.native_busy()
         return {
+            "update_maintenance": manager.update_blocked,
             "selected_engine": manager.engine,
             "active_settings": manager.active_settings,
             "selection_id": manager.selection_id,
@@ -449,7 +465,9 @@ def create_app(config, admin_key, inference_key, state_dir):
 
     @app.post("/api/models", status_code=201)
     async def register_model(payload: dict):
+        manager.check_update()
         async with registry_lock:
+            manager.check_update()
             worker = asyncio.create_task(asyncio.to_thread(registry.persist, payload))
             try:
                 candidate, spec = await asyncio.shield(worker)
@@ -469,7 +487,9 @@ def create_app(config, admin_key, inference_key, state_dir):
     async def remove_model(engine: str, model: str):
         if manager.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation already running")
+        manager.check_update()
         async with registry_lock, manager.lock:
+            manager.check_update()
             if manager.engine == engine and manager.model == model:
                 raise HTTPException(409, "Unload the model before removing its registration")
             worker = asyncio.create_task(asyncio.to_thread(registry.persist_remove, engine, model))
@@ -484,6 +504,40 @@ def create_app(config, admin_key, inference_key, state_dir):
                 raise
             registry.uninstall(engine, model)
             return {"engine": engine, "id": model, "removed": True}
+
+    @app.get("/api/updates")
+    async def update_state():
+        return updates.view()
+
+    @app.post("/api/updates/{engine}/check")
+    async def update_check(engine: str):
+        try:
+            return await updates.check(engine)
+        except (
+            httpx.HTTPError,
+            OSError,
+            ValueError,
+            RuntimeError,
+            TimeoutError,
+            KeyError,
+            TypeError,
+        ):
+            raise HTTPException(
+                503, "Cannot check upstream versions; no installed files changed"
+            ) from None
+
+    @app.post("/api/updates/{engine}", status_code=202)
+    async def update_action(engine: str, payload: UpdateAction):
+        if recovery_pending:
+            raise HTTPException(409, "A host recovery action is already scheduled")
+        if payload.action not in {"stage", "apply", "rollback"}:
+            raise HTTPException(422, "Unknown update action")
+        async with registry_lock:
+            return updates.start(payload.action, engine, payload.revision, payload.test_models)
+
+    @app.get("/api/updates/report")
+    async def update_report():
+        return updates.report()
 
     @app.get("/api/telemetry")
     async def metrics():
@@ -580,6 +634,7 @@ def create_app(config, admin_key, inference_key, state_dir):
         if manager.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation in progress; retry when ready")
         async with manager.lock:
+            manager.check_update()
             selection = request.headers.get("x-igm-selection-id")
             if selection is not None and selection != manager.selection_id:
                 raise HTTPException(409, "Selection changed; refresh status before inference")

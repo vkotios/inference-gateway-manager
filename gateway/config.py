@@ -150,6 +150,10 @@ def validate(config):
     ipaddress.ip_address(config.get("host", "127.0.0.1"))
     if not 1 <= config.get("port", 9000) <= 65535:
         raise ValueError("Invalid listening port")
+    if "engine_updates" in config:
+        from .updates import validate_options as validate_updates
+
+        validate_updates(config)
     return config
 
 

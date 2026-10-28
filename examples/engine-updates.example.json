@@ -1,0 +1,23 @@
+{
+  "engine_updates": {
+    "lucebox": {
+      "repository": "Luce-Org/lucebox",
+      "installed_root": "/opt/lucebox",
+      "channel": "tags",
+      "executable": "server/build/luce_server",
+      "build": [
+        ["/usr/bin/git", "-C", "{release}", "submodule", "update", "--init", "--recursive"],
+        ["/usr/bin/cmake", "-S", "{release}/server", "-B", "{release}/server/build", "-DCMAKE_BUILD_TYPE=Release", "-DLUCE_GPU_BACKEND=hip", "-DLUCE_HIP_ARCHITECTURES=gfx1151"],
+        ["/usr/bin/cmake", "--build", "{release}/server/build", "--target", "luce_server", "-j", "2"]
+      ],
+      "checks": [
+        {"argv": ["{release}/server/build/luce_server", "--help"], "contains": ["--host", "--port", "--max-ctx", "--model-name"]}
+      ],
+      "tests": [
+        {"model": "registered-lucebox-canary", "context": 4096, "expected": "IGM_UPDATE_OK"}
+      ],
+      "build_timeout": 3600,
+      "test_timeout": 120
+    }
+  }
+}

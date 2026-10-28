@@ -62,6 +62,7 @@ function disconnect(message = "Signed out. Existing inference continues.") {
   capabilities(); buttons(); notice(message);
 }
 function buttons() {
+  if (typeof updateButtons === "function") updateButtons();
   $("login-form").hidden = authenticated; $("session-bar").hidden = !authenticated;
   $("session-description").textContent = key ? "Connected with a control key · memory only" : "Signed in to this browser";
   $("sessions-toggle").disabled = !authenticated || Boolean(key);

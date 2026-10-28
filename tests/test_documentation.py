@@ -24,6 +24,7 @@ def test_new_documentation_links_resolve():
         ROOT / "docs/mcp-registration.md",
         ROOT / "docs/branding.md",
         ROOT / "docs/lucebox-ds4a.md",
+        ROOT / "docs/engine-updates.md",
         ROOT / "skills/inference-gateway-manager/SKILL.md",
         ROOT / "skills/inference-gateway-manager/references/context-sizing.md",
     ]

@@ -8,6 +8,7 @@ import secrets
 import signal
 import subprocess
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import httpx
@@ -83,6 +84,8 @@ class Manager:
         self.launch_id = None
         # Set by the API layer when a maintenance lease directory is configured.
         self.lease_guard = None
+        self.update_blocked = False
+        self.update_authorized = ContextVar("igm_update_authorized", default=False)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=5), trust_env=False)
 
     @property
@@ -90,6 +93,12 @@ class Manager:
         return self.lock.locked() or (
             self.loading_task is not None and not self.loading_task.done()
         )
+
+    def check_update(self):
+        if self.update_blocked and not self.update_authorized.get():
+            raise HTTPException(
+                423, "Engine update maintenance or recovery verification in progress"
+            )
 
     def check_lease(self):
         """Refuse a stop/start while a maintenance lease is held (inside the lifecycle lock)."""
@@ -304,6 +313,7 @@ class Manager:
                     pass
 
     async def select_engine(self, engine, force=False):
+        self.check_update()
         if engine not in self.config["engines"]:
             raise HTTPException(404, "Unknown engine")
         await self.interrupt_loading(force)
@@ -321,11 +331,13 @@ class Manager:
             self.phase = "selected"
 
     async def unload(self, force=False):
+        self.check_update()
         await self.interrupt_loading(force)
         async with self.lock:
             await self._stop(force)
 
     async def load_model(self, model, force=False, *, engine=None, context=None, reasoning=None):
+        self.check_update()
         # Invalid force requests must never cancel another in-flight load.
         self.prepare_model(model, engine, context, reasoning)
         await self.interrupt_loading(force)
@@ -354,6 +366,7 @@ class Manager:
                 self.loading_task = None
 
     def prepare_model(self, model, engine=None, context=None, reasoning=None):
+        self.check_update()
         target_engine = engine if engine is not None else self.engine
         if not target_engine:
             raise HTTPException(409, "Select an engine before a model")
@@ -387,6 +400,7 @@ class Manager:
 
     async def _load_model(self, model, force=False, *, engine=None, context=None, reasoning=None):
         async with self.lock:
+            self.check_update()
             target_engine, spec, settings = self.prepare_model(model, engine, context, reasoning)
             same_model = target_engine == self.engine and model == self.model
             if (
@@ -518,7 +532,9 @@ class Manager:
                 self.loading_task = None
 
     async def close(self):
+        token = self.update_authorized.set(True)
         try:
             await self.unload(force=True)
         finally:
+            self.update_authorized.reset(token)
             await self.http.aclose()

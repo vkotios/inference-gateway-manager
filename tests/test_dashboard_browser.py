@@ -506,3 +506,66 @@ async def test_generation_line_renders_after_sign_in(browser_page, live_gateway)
     await expect(page.locator("#generation")).to_have_text(
         "No generation data since the gateway started"
     )
+
+
+async def test_update_authorization_and_reviewable_public_report(browser_page, live_gateway):
+    page = browser_page
+    await mocked_dashboard(page, live_gateway[0])
+    sha = "a" * 40
+    calls = []
+    view = {
+        "enabled": True,
+        "busy": False,
+        "job": None,
+        "recovery_required": False,
+        "engines": [
+            {
+                "id": "fixture-update",
+                "installed_version": "b" * 40,
+                "tests": [{"model": "test-model", "context": 4096}],
+                "available": [{"name": "v2", "revision": sha}],
+                "staged": [{"revision": sha, "checked": True}],
+                "rollback_available": True,
+            }
+        ],
+    }
+
+    async def updates(route):
+        path = route.request.url.split("/api/updates", 1)[1]
+        if route.request.method == "POST":
+            calls.append(route.request.post_data_json)
+            result = view
+        elif path == "/report":
+            result = {
+                "title": "Engine update compatibility report",
+                "body": "Review this report. GitHub issues are public.\nresult: failed\nrollback: verified",
+            }
+        else:
+            result = view
+        await route.fulfill(content_type="application/json", body=json.dumps(result))
+
+    await page.route("**/api/updates**", updates)
+    await login(page)
+    await page.get_by_text("Engine updates and rollback", exact=True).click()
+    await expect(page.locator("#updates-tests")).to_contain_text("test-model at 4096")
+    await page.locator("#updates-version").select_option(sha)
+    await expect(page.locator("#updates-apply")).to_be_disabled()
+    await page.locator("#updates-consent").check()
+    await page.locator("#updates-apply").click()
+    await expect(page.locator("#confirm-description")).to_contain_text("test-model")
+    await page.locator("#confirm-accept").click()
+    await expect(page.locator("#updates-consent")).not_to_be_checked()
+    assert calls == [{"action": "apply", "revision": sha, "test_models": ["test-model"]}]
+    await page.get_by_role("button", name="Review problem report").click()
+    await expect(page.locator("#updates-report-panel")).to_be_visible()
+    href = await page.locator("#updates-report-link").get_attribute("href")
+    assert href.startswith("https://github.com/vkotios/inference-gateway-manager/issues/new?")
+    assert "rollback%3A+verified" in href
+    await page.locator("#updates-report-body").fill("Reviewed report")
+    await expect(page.locator("#updates-report-link")).to_have_attribute(
+        "href", __import__("re").compile(".*body=Reviewed\\+report.*")
+    )
+    await page.set_viewport_size({"width": 390, "height": 844})
+    assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    await page.get_by_role("button", name="Sign out", exact=True).click()
+    await expect(page.locator("#updates-report-body")).to_have_value("")
