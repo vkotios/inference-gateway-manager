@@ -55,7 +55,7 @@ function disconnect(message = "Signed out. Existing inference continues.") {
   for (const id of ["ram-meter", "gpu-meter"]) $(id).value = 0;
   for (const id of ["ram-chart", "gpu-chart", "sessions-list", "artifacts", "inspection-summary", "inspection-warnings", "file-entries"]) $(id).replaceChildren();
   for (const id of ["engine", "model", "register-engine", "register-profile"]) { $(id).replaceChildren(); option($(id), "", "Sign in first"); }
-  for (const id of ["key", "password", "register-path", "register-id", "register-context"]) $(id).value = "";
+  for (const id of ["key", "password", "register-path", "register-id", "register-context", "system-prompt"]) $(id).value = "";
   $("file-path").textContent = ""; $("file-status").textContent = ""; $("file-root").replaceChildren(); listing = null; browserTarget = null;
   for (const id of ["password", "key"]) { $(id).type = "password"; $("show-" + id).textContent = "Show"; $("show-" + id).setAttribute("aria-label", id === "key" ? "Show control key" : "Show password"); }
   $("sessions-panel").hidden = true; $("force").checked = false;
@@ -82,6 +82,7 @@ function buttons() {
   $("custom-context").disabled = !authenticated || working || cancelPending || !model?.context_limits?.adjustable;
   $("context").disabled = !authenticated || working || cancelPending || !model?.context_limits?.adjustable;
   $("reasoning").disabled = !authenticated || working || cancelPending || (model?.reasoning_modes || ["auto"]).length < 2;
+  $("system-prompt").disabled = !authenticated || working || cancelPending || !model || model.system_prompt_supported === false;
   $("inspect-model").disabled = !authenticated || inspecting || saving || !registrationProfile() || !$("register-path").value;
   $("add-model").disabled = !authenticated || !candidate || saving;
   $("browse-model").disabled = !authenticated || saving || !registrationProfile();
@@ -106,6 +107,7 @@ function capabilities() {
   for (const mode of model?.reasoning_modes || ["auto"]) option($("reasoning"), mode, mode === "auto" ? "Auto" : mode === "on" ? "On" : "Off");
   const defaultReasoning = loadedSelection ? state.active_settings?.reasoning ?? model.reasoning : model?.reasoning;
   if ([...$("reasoning").options].some(item => item.value === defaultReasoning)) $("reasoning").value = defaultReasoning;
+  $("system-prompt").value = loadedSelection ? state.active_settings?.system_prompt || "" : "";
   $("settings-help").textContent = model ? `Client settings override default reasoning. ${limits?.adjustable ? `Context capacity is a launch setting (${limits.min.toLocaleString()}–${limits.max.toLocaleString()} tokens), applied when the model loads.` : "Context capacity is fixed by this model/profile."} ${model.reasoning_change === "restart" ? "Changing default reasoning requires a model reload." : model.reasoning_change === "request" ? "Default reasoning is applied to requests after loading." : "Default reasoning is fixed by this model/profile."}` : "Select a model to view its supported settings.";
   buttons();
 }
@@ -303,7 +305,7 @@ $("sessions-toggle").onclick = () => $("sessions-panel").hidden ? loadSessions()
 $("sessions-refresh").onclick = loadSessions;
 $("refresh-catalog").onclick = async () => {
   const engine = $("engine").value, model = $("model").value;
-  const context = $("context").value, custom = $("custom-context").value, reasoning = $("reasoning").value;
+  const context = $("context").value, custom = $("custom-context").value, reasoning = $("reasoning").value, systemPrompt = $("system-prompt").value;
   $("refresh-catalog").disabled = true;
   try {
     await refreshCatalog(engine, model, true);
@@ -311,13 +313,14 @@ $("refresh-catalog").onclick = async () => {
       if ([...$("context").options].some(o => o.value === context)) $("context").value = context;
       $("custom-context").value = custom; $("custom-context-field").hidden = context !== "custom" || !selectedModel()?.context_limits?.adjustable;
       if ([...$("reasoning").options].some(o => o.value === reasoning)) $("reasoning").value = reasoning;
+      $("system-prompt").value = systemPrompt;
     }
     notice("Model catalog refreshed. Current model selection and settings are preserved when supported.");
   } catch (error) { notice(error.message); }
   finally { buttons(); }
 };
 $("engine").onchange = () => { models(); buttons(); };
-$("model").onchange = capabilities; $("force").onchange = buttons;
+$("model").onchange = () => { capabilities(); buttons(); }; $("force").onchange = buttons;
 $("context").onchange = () => { $("custom-context-field").hidden = $("context").value !== "custom"; $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); if ($("context").value === "custom") $("custom-context").focus(); };
 $("custom-context").oninput = () => { $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); };
 $("select-engine").onclick = () => { if ($("engine").value) action("/api/engine", {engine: $("engine").value}); };
@@ -333,6 +336,7 @@ $("load").onclick = () => {
     body.context = value;
   }
   if ((model.reasoning_modes || ["auto"]).length > 1) body.reasoning = $("reasoning").value;
+  if (model.system_prompt_supported !== false) body.system_prompt = $("system-prompt").value;
   action("/api/model", body);
 };
 $("unload").onclick = () => action("/api/unload", {});

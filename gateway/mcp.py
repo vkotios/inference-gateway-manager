@@ -54,13 +54,17 @@ def create_server(client):
         model: str,
         context: int | None = None,
         reasoning: Literal["auto", "on", "off"] | None = None,
+        system_prompt: str | None = None,
     ) -> dict:
         """Explicitly load a model and settings when idle. Never forces interruption.
 
         Context changes restart the engine; reasoning is a client-overridable default.
+        System prompts prepend client instructions; omit to retain, or pass empty text to clear.
         Return and preserve selection_id for subsequent delegation. Loading can take minutes.
         """
-        return await client.load(engine, model, context=context, reasoning=reasoning)
+        return await client.load(
+            engine, model, context=context, reasoning=reasoning, system_prompt=system_prompt
+        )
 
     @server.tool(annotations=change)
     async def gateway_unload() -> dict:

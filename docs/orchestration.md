@@ -30,14 +30,14 @@ Control authority includes force interruption and optionally administrator-enabl
 | GET | `/api/status` | `selected_engine`, `loaded_model`, `active_settings`, `selection_id`, `phase`, `busy`, `native_busy`, `occupancy_source`, `active_requests`, `requests`, `error`, process identities |
 | GET | `/api/telemetry` | Host measurements; unavailable counters remain null |
 | POST | `/api/engine` | `{"engine":"ENGINE_ID","force":false}`; select only, stop previous engine if switching |
-| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; optional `engine`, `context`, `reasoning`; validate before stopping, context changes reload |
+| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; optional `engine`, `context`, `reasoning`, `system_prompt`; validate before stopping, context changes reload |
 | POST | `/api/unload` | `{"force":false}`; stop model/backend, retain selected engine |
 | GET | `/v1/models` | Enabled models with `owned_by`, `context_length`, loaded/unloaded `status` |
 | POST | `/v1/chat/completions` | OpenAI-compatible body; `model` must equal loaded model; SSE supported |
 
 `ENGINE_ID` and `MODEL_ID` are placeholders discovered from the catalog, not literal values to submit. Other inference transports are backend-dependent. Add `X-Client-Name` to inference requests for useful activity labels; never put secrets in that label.
 
-Compare the requested context/reasoning with `active_settings` before reusing a ready model. Include its `selection_id` as `X-IGM-Selection-ID` on inference to reject settings that changed before admission. This guard does not reserve the backend or replace orchestration ownership. See [settings and client budgets](features.md#context-and-reasoning) for capability declarations and explicit client reasoning precedence.
+Compare the requested context, reasoning and system prompt with `active_settings` before reusing a ready model. Include its `selection_id` as `X-IGM-Selection-ID` on inference to reject settings that changed before admission. This guard does not reserve the backend or replace orchestration ownership. See [settings and client budgets](features.md#context-and-reasoning) for capability declarations and explicit client reasoning precedence.
 
 ## Recommended controller procedure
 

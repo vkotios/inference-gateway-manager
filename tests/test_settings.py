@@ -207,6 +207,7 @@ async def test_settings_restart_readback_frozen_spec_and_invalid_preflight(tmp_p
             "requested_context": 8192,
             "context_source": "native_slots",
             "reasoning": "off",
+            "system_prompt": "",
         }
         await m.load_model("fixture", context=8192, reasoning="off")
         assert m.process is process and m.selection_id == selection

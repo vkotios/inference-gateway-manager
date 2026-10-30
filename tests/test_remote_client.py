@@ -19,7 +19,9 @@ async def test_load_and_delegation_keep_explicit_selection_and_separate_credenti
     async with GatewayClient(
         "http://gateway.lan:9000", "a" * 32, "b" * 32, transport=httpx.MockTransport(backend)
     ) as client:
-        state = await client.load("llama", "model", context=65536, reasoning="off")
+        state = await client.load(
+            "llama", "model", context=65536, reasoning="off", system_prompt="Be concise."
+        )
         result = await client.delegate(
             "model", "Review this code", state["selection_id"], context="print(1)", max_tokens=2048
         )
@@ -31,6 +33,7 @@ async def test_load_and_delegation_keep_explicit_selection_and_separate_credenti
         "model": "model",
         "context": 65536,
         "reasoning": "off",
+        "system_prompt": "Be concise.",
         "force": False,
     }
     assert requests[1][0] == "/v1/chat/completions"
