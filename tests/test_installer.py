@@ -30,6 +30,10 @@ def test_all_engine_choices_follow_public_catalog_and_preserve_profiles():
             "gufo",
             "lucebox",
             "ds4a",
+            "halogen",
+            "halogen-flash",
+            "talus",
+            "strixite",
         }
     )
     config = build_config(ENGINE_IDS, "/data/models")
@@ -60,12 +64,25 @@ def test_single_selection_retains_all_conflict_matchers(engine):
 
 
 def test_model_path_rewrite_respects_directory_boundaries():
-    value = ["/opt/models", "/opt/models/a.gguf", "/opt/models-old/a.gguf", "{artifact.draft}"]
+    value = [
+        "/opt/models",
+        "/opt/models/a.gguf",
+        "/opt/models-old/a.gguf",
+        "{artifact.draft}",
+        "/opt/models:/opt/models:ro",
+        "127.0.0.1:8086:8086",
+        "HALOGEN_CHECKPOINT=/opt/models/qwen/model.hgn",
+        "HALOGEN_TOKENIZER=/opt/models-old/tokenizer",
+    ]
     assert _rewrite(value, Path("/data/models")) == [
         "/data/models",
         "/data/models/a.gguf",
         "/opt/models-old/a.gguf",
         "{artifact.draft}",
+        "/data/models:/data/models:ro",
+        "127.0.0.1:8086:8086",
+        "HALOGEN_CHECKPOINT=/data/models/qwen/model.hgn",
+        "HALOGEN_TOKENIZER=/opt/models-old/tokenizer",
     ]
 
 
