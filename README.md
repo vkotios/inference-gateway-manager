@@ -9,7 +9,7 @@
 
 [Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md)
 
-A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar (ds4), Gufo, Lucebox and ds4a**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
+A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar (ds4), Gufo, Lucebox, ds4a, Halogen, Halogen Flash, Talus and Strixite**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
 
 ## What it does
 
@@ -50,7 +50,7 @@ cd inference-gateway-manager
 bash installer/install.sh
 ```
 
-Setup asks for an installation directory, any of the seven supported engines, your models directory, loopback or specific LAN IP/subnet/hostname, and manual, user-service or system-service startup. Review the summary before confirming. The default installation directory is `~/.local/share/inference-gateway-manager`.
+Setup asks for an installation directory, any of the eleven supported engines, your models directory, loopback or specific LAN IP/subnet/hostname, and manual, user-service or system-service startup. Review the summary before confirming. The default installation directory is `~/.local/share/inference-gateway-manager`.
 
 The installer creates a private configuration and two separate random credentials: **control** for dashboard/lifecycle operations and **inference** for ordinary clients. It prints their owner-only file location and your selected dashboard and `/v1` URLs; retrieve the keys locally on the server and supply the appropriate key to each client. Dashboard password login is separate. Existing configurations, keys, environments and nonempty destinations are refused.
 
@@ -84,7 +84,7 @@ The opt-in [engine updater](docs/engine-updates.md) is separate from gateway upg
 
 ## Engine configuration
 
-The [example configuration](examples/config.example.json) exposes seven engine selections. The dashboard, HTTP API and MCP discovery populate from this configuration.
+The [example configuration](examples/config.example.json) exposes eleven engine selections. The dashboard, HTTP API and MCP discovery populate from this configuration.
 
 | Engine | Configuration ID | Example registration profile | Occupancy |
 | --- | --- | --- | --- |
@@ -95,6 +95,10 @@ The [example configuration](examples/config.example.json) exposes seven engine s
 | Gufo | `gufo` | GGUF, optionally with DFlash2 companions | Native slots + gateway requests |
 | Lucebox | `lucebox` | DeepSeek V4 GGUF without a draft | Gateway requests only |
 | ds4a (ds4fa fork) | `ds4a` | DeepSeek V4 Flash GGUF + native DSpark support GGUF | Gateway requests only |
+| Halogen | `halogen` | Qwen3.8 27B `.hgn` pack in a Podman/Docker container | Native slots + gateway requests |
+| Halogen Flash | `halogen-flash` | Qwen3.8-Flash-Next `.hgn` pack in a Podman/Docker container | Native slots + gateway requests |
+| Talus | `talus` | GGUF (Qwen3.8-Flash-Next and other Strix Halo families) | Native slots + gateway requests |
+| Strixite | `strixite` | Qwen3.8-Flash-Next GGUF | Gateway requests only |
 
 **ds4 and ds4a remain separate options.** The existing ds4 entry retains its `dwarfstar` ID and launch configuration. The `ds4a` entry uses the ds4fa fork and its own executable path, backend port and model ID.
 
@@ -102,7 +106,7 @@ Lucebox and ds4a model examples are disabled until configured. Their profiles of
 
 Install the selected engines and weights independently, then edit paths, model IDs and approved model roots in the private host configuration. Registering a model does not load it: select the engine and explicitly load the model before inference. Gateway-only occupancy tracks requests through IGM and does not verify native idle; route all inference through the gateway.
 
-See [Lucebox and ds4a integration](docs/lucebox-ds4a.md) for launch profiles, DSpark artifacts, process matching and acceptance steps, and [Kyojin integration](docs/kyojin.md) for EXL3 setup and ROCm requirements. Updating the source example does not update an installed gateway's private configuration or reload its process.
+See [Lucebox and ds4a integration](docs/lucebox-ds4a.md) for launch profiles, DSpark artifacts, process matching and acceptance steps, [Kyojin integration](docs/kyojin.md) for EXL3 setup and ROCm requirements, and [Halogen](docs/halogen.md), [Halogen Flash](docs/halogen-flash.md), [Talus](docs/talus.md) and [Strixite](docs/strixite.md) for the Strix Halo engine setups. Updating the source example does not update an installed gateway's private configuration or reload its process.
 
 ## LAN security
 
@@ -142,7 +146,7 @@ Authenticate `/api/*` with the control credential using the `Authorization` head
 
 Add `X-Client-Name` to label requests. Model IDs must match the currently loaded gateway model. Selecting a model in a coding client's picker **does not automatically switch the engine**. The optional MCP controller or an HTTP controller calls control APIs first. Controllers can send `X-IGM-Selection-ID` from status/load to refuse stale settings. HTTP 409 means busy/invalid lifecycle (including unknown native occupancy on a non-force stop); inference uses 503 for unknown occupancy, and startup or shutdown failures also use 503; 401/403 means credential/role rejection. Startup may take several minutes; `/api/status` remains available while loading. A force-cancelled loader receives 409 and unload retains the selected engine without a startup-error message. Inference JSON must contain finite numbers and at most 128 nesting levels (invalid payloads return 400).
 
-llama.cpp, Strata, Kyojin and Gufo use native `/slots` in addition to tracked requests. DwarfStar (ds4), Lucebox and ds4a use `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
+llama.cpp, Strata, Kyojin, Gufo, Halogen, Halogen Flash and Talus use native `/slots` in addition to tracked requests. DwarfStar (ds4), Lucebox, ds4a and Strixite use `probe: gateway_only`: processing is measured at this proxy, **not native slot telemetry**. Direct loopback callers bypass that measurement and must not be used. Never label this mode as verified native idle. An unmanaged native engine blocks loading; reconcile its supervisor/process externally rather than silently killing unrelated work. Native matchers detect conflicts, not ownership; use distinctive argv tokens for Python/module launches (for example `serve.server` for Strata). The manager owns its launched process, descendants and session members. Detached container-exec children must inherit `IGM_ENGINE_RUN_ID`; forward it explicitly with an administrator-configured argv argument such as `"IGM_ENGINE_RUN_ID={launch_id}"` to the container environment. A native match alone never authorizes signalling. Unreadable or missing ownership tags fail closed; check container permissions before relying on teardown.
 
 ## Clients
 

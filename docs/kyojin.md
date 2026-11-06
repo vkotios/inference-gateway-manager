@@ -1,6 +1,6 @@
 # Kyojin integration
 
-IGM treats Kyojin as an administrator-configured native process, using the existing lifecycle, authenticated catalog and transparent inference proxy. The example now offers `llama`, `strata`, `kyojin`, `dwarfstar`, `gufo`, `lucebox` and `ds4a`; the dashboard renders that catalog dynamically. The gateway runtime needs no engine-specific Python or JavaScript adapter.
+IGM treats Kyojin as an administrator-configured native process, using the existing lifecycle, authenticated catalog and transparent inference proxy. The example now offers `llama`, `strata`, `kyojin`, `dwarfstar`, `gufo`, `lucebox`, `ds4a`, `halogen`, `halogen-flash`, `talus` and `strixite`; the dashboard renders that catalog dynamically. The gateway runtime needs no engine-specific Python or JavaScript adapter.
 
 ## Supported example
 

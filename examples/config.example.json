@@ -48,6 +48,18 @@
     },
     {
       "exe": "ds4fa-server"
+    },
+    {
+      "exe": "halogen-server"
+    },
+    {
+      "exe": "halogen-flash-server"
+    },
+    {
+      "exe": "talus-server"
+    },
+    {
+      "exe": "strixite"
     }
   ],
   "engines": {
@@ -909,6 +921,372 @@
               "kind": "file",
               "format": "gguf"
             }
+          }
+        }
+      }
+    },
+    "halogen": {
+      "label": "Halogen",
+      "models": {
+        "qwen3.8-27b-halogen": {
+          "argv": [
+            "podman",
+            "run",
+            "--rm",
+            "--name",
+            "igm-halogen-{launch_id}",
+            "--device",
+            "/dev/kfd",
+            "--device",
+            "/dev/dri",
+            "--group-add",
+            "render",
+            "--security-opt",
+            "label=disable",
+            "-e",
+            "IGM_ENGINE_RUN_ID={launch_id}",
+            "-p",
+            "127.0.0.1:8086:8086",
+            "-v",
+            "/opt/models:/opt/models:ro",
+            "ghcr.io/peonist-ai/halogen-server:latest",
+            "serve",
+            "--model",
+            "/opt/models/qwen3.8-27b.hgn",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8086",
+            "--ctx",
+            "{context}",
+            "--slots"
+          ],
+          "base_url": "http://127.0.0.1:8086",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "hgn": {
+          "format": "native",
+          "extensions": [
+            ".hgn"
+          ],
+          "argv": [
+            "podman",
+            "run",
+            "--rm",
+            "--name",
+            "igm-halogen-{launch_id}",
+            "--device",
+            "/dev/kfd",
+            "--device",
+            "/dev/dri",
+            "--group-add",
+            "render",
+            "--security-opt",
+            "label=disable",
+            "-e",
+            "IGM_ENGINE_RUN_ID={launch_id}",
+            "-p",
+            "127.0.0.1:8086:8086",
+            "-v",
+            "/opt/models:/opt/models:ro",
+            "ghcr.io/peonist-ai/halogen-server:latest",
+            "serve",
+            "--model",
+            "{path}",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8086",
+            "--ctx",
+            "{context}",
+            "--slots"
+          ],
+          "base_url": "http://127.0.0.1:8086",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      }
+    },
+    "halogen-flash": {
+      "label": "Halogen Flash",
+      "models": {
+        "qwen3.8-flash-next-halogen-flash": {
+          "argv": [
+            "podman",
+            "run",
+            "--rm",
+            "--name",
+            "igm-halogen-flash-{launch_id}",
+            "--device",
+            "/dev/kfd",
+            "--device",
+            "/dev/dri",
+            "--group-add",
+            "render",
+            "--security-opt",
+            "label=disable",
+            "-e",
+            "IGM_ENGINE_RUN_ID={launch_id}",
+            "-p",
+            "127.0.0.1:8087:8087",
+            "-v",
+            "/opt/models:/opt/models:ro",
+            "ghcr.io/peonist-ai/halogen-flash-server:latest",
+            "serve",
+            "--model",
+            "/opt/models/qwen3.8-flash-next.hgn",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8087",
+            "--ctx",
+            "{context}",
+            "--slots"
+          ],
+          "base_url": "http://127.0.0.1:8087",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "hgn": {
+          "format": "native",
+          "extensions": [
+            ".hgn"
+          ],
+          "argv": [
+            "podman",
+            "run",
+            "--rm",
+            "--name",
+            "igm-halogen-flash-{launch_id}",
+            "--device",
+            "/dev/kfd",
+            "--device",
+            "/dev/dri",
+            "--group-add",
+            "render",
+            "--security-opt",
+            "label=disable",
+            "-e",
+            "IGM_ENGINE_RUN_ID={launch_id}",
+            "-p",
+            "127.0.0.1:8087:8087",
+            "-v",
+            "/opt/models:/opt/models:ro",
+            "ghcr.io/peonist-ai/halogen-flash-server:latest",
+            "serve",
+            "--model",
+            "{path}",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8087",
+            "--ctx",
+            "{context}",
+            "--slots"
+          ],
+          "base_url": "http://127.0.0.1:8087",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      }
+    },
+    "talus": {
+      "label": "Talus",
+      "models": {
+        "qwen3.8-flash-next-talus": {
+          "argv": [
+            "/opt/talus/bin/talus-server",
+            "--model",
+            "/opt/models/qwen3.8-flash-next.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8088",
+            "--ctx-size",
+            "{context}",
+            "--slots"
+          ],
+          "base_url": "http://127.0.0.1:8088",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 262144,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072,
+              262144
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "gguf": {
+          "format": "gguf",
+          "argv": [
+            "/opt/talus/bin/talus-server",
+            "--model",
+            "{path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8088",
+            "--ctx-size",
+            "{context}",
+            "--slots"
+          ],
+          "base_url": "http://127.0.0.1:8088",
+          "context": 32768,
+          "ready_path": "/health",
+          "probe": "slots",
+          "context_limits": {
+            "min": 4096,
+            "max": 262144,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072,
+              262144
+            ],
+            "adjustable": true
+          }
+        }
+      }
+    },
+    "strixite": {
+      "label": "Strixite",
+      "models": {
+        "qwen3.8-flash-next-strixite": {
+          "argv": [
+            "/opt/strixite/bin/strixite",
+            "--model",
+            "/opt/models/qwen3.8-flash-next.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8089",
+            "--ctx",
+            "{context}"
+          ],
+          "base_url": "http://127.0.0.1:8089",
+          "context": 32768,
+          "ready_path": "/v1/models",
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
+          }
+        }
+      },
+      "profiles": {
+        "gguf": {
+          "format": "gguf",
+          "argv": [
+            "/opt/strixite/bin/strixite",
+            "--model",
+            "{path}",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8089",
+            "--ctx",
+            "{context}"
+          ],
+          "base_url": "http://127.0.0.1:8089",
+          "context": 32768,
+          "ready_path": "/v1/models",
+          "probe": "gateway_only",
+          "context_limits": {
+            "min": 4096,
+            "max": 131072,
+            "presets": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "adjustable": true
           }
         }
       }

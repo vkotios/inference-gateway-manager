@@ -41,6 +41,10 @@ async def test_example_catalog_includes_kyojin_without_private_launch_details(tm
                 "gufo",
                 "lucebox",
                 "ds4a",
+                "halogen",
+                "halogen-flash",
+                "talus",
+                "strixite",
             }
             kyojin = next(e for e in catalog if e["id"] == "kyojin")
             assert kyojin["label"] == "Kyojin"

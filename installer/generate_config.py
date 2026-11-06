@@ -21,10 +21,19 @@ EXAMPLE_MODEL_ROOT = "/opt/models"
 
 
 def _rewrite(value, models_dir):
-    if isinstance(value, str) and (
-        value == EXAMPLE_MODEL_ROOT or value.startswith(EXAMPLE_MODEL_ROOT + "/")
-    ):
-        return str(models_dir / Path(value).relative_to(EXAMPLE_MODEL_ROOT))
+    if isinstance(value, str):
+        # Also rewrite container bind-mount segments such as /opt/models:/opt/models:ro.
+        segments = value.split(":")
+        if any(
+            segment == EXAMPLE_MODEL_ROOT or segment.startswith(EXAMPLE_MODEL_ROOT + "/")
+            for segment in segments
+        ):
+            return ":".join(
+                str(models_dir / Path(segment).relative_to(EXAMPLE_MODEL_ROOT))
+                if segment == EXAMPLE_MODEL_ROOT or segment.startswith(EXAMPLE_MODEL_ROOT + "/")
+                else segment
+                for segment in segments
+            )
     if isinstance(value, list):
         return [_rewrite(item, models_dir) for item in value]
     if isinstance(value, dict):
