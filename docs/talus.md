@@ -1,39 +1,27 @@
 # Talus integration
 
-IGM treats Talus as an administrator-configured native process, using the existing lifecycle, authenticated catalog and transparent inference proxy. The example offers `llama`, `strata`, `kyojin`, `dwarfstar`, `gufo`, `lucebox`, `ds4a`, `halogen`, `halogen-flash`, `talus` and `strixite`; the dashboard renders that catalog dynamically. The gateway runtime needs no engine-specific Python or JavaScript adapter.
+The example targets the [Talus Rust server/native CLI contract](https://github.com/nsbradley88/talus-public/tree/c3805ee). It uses a dense Qwen3.8 27B GGUF as a minimal example; Flash-Next requires its own pack, native weights and tokenizer configuration and cannot be represented by this dense profile.
 
-## Supported example
+## Launch contract
 
-Talus is an open-source Strix Halo engine (a fork of Strata) that can serve Qwen3.8-Flash-Next, the dense Qwen3.8 27B, GLM, MiMo and Laguna models from **GGUF** files:
+- Engine `talus`, model `qwen3.8-27b-talus`; backend `http://127.0.0.1:8088`.
+- `/opt/talus/bin/talus-server --config {config_path} --host 127.0.0.1 --port 8088 --ctx-size {context}`.
+- IGM writes an administrator-owned `config_template` naming the real `/opt/talus/bin/talus-cli` as `exe`. The template passes the GGUF with `--model`, native context with `--ctx` and `--no-mtp` for a baseline without additional draft artifacts. The same GGUF supplies the tokenizer; the template defines model ID, stop token and sampling defaults.
+- The outer `--ctx-size` binds server limits as well as engine context (32K default, 4K–256K example range). The server's CLI does **not** accept `--slots`; `/slots` is exposed without that flag.
+- Readiness `/health`; occupancy `probe: slots`, using the server's boolean `is_processing` field. Verify this contract for the installed revision.
 
-- Engine ID: `talus`; model ID: `qwen3.8-flash-next-talus`.
-- Launch: native binary `/opt/talus/bin/talus-server` bound to `127.0.0.1:8088`.
-- Loopback backend: `http://127.0.0.1:8088`.
-- Readiness: `/health` returns success after model load and warm-up.
-- Occupancy: `probe: slots`, using `/slots` and boolean `is_processing`, inherited from the Strata-family server contract. If the installed Talus revision does not expose `/slots` with `is_processing`, set `probe: "gateway_only"` on the entry rather than claiming native occupancy.
-- Example settings: 32K context default with 4K–256K adjustable presets. These are configurable settings, not a universal capacity or quality claim.
-- Chat and raw completions use `/v1/chat/completions` and `/v1/completions` through the gateway's OpenAI-compatible proxy.
+The real `exe` is essential: an unconfigured Talus server can use a mock backend. HTTP readiness alone is therefore insufficient evidence of real inference. Confirm the spawned `talus-cli` process and engine output. See upstream's [run-config example](https://github.com/nsbradley88/talus-public/blob/c3805ee/README.md).
 
-Model IDs must be unique across all engines; the suffixed `-talus` ID avoids duplicating Strata's, Kyojin's or Halogen Flash's Qwen3.8-Flash-Next ID. The client must still select the engine and load the model through the control API before inference.
+## Setup and registration
 
-## Host setup
+Install the server, native CLI, kernel library and compatible ROCm/HIP runtime independently. Keep the kernel library beside the CLI or configure verified upstream runtime paths. Any required library directories belong in the administrator `config_template`/environment; IGM does not source an interactive shell. Ensure device access to `/dev/kfd` and `/dev/dri`.
 
-1. Independently build/install Talus and obtain compatible GGUF weights. IGM does not install engines or download/convert weights.
-2. Copy the Talus engine entry and its native matchers from `examples/config.example.json` into the host's **existing private configuration**. Preserve existing engines, credentials, LAN restrictions, recovery options and default selection. Do not replace a live host configuration with the generic example.
-3. Replace `/opt/talus/bin/talus-server` and `/opt/models/qwen3.8-flash-next.gguf` with verified installed paths. Keep `base_url`/port consistent with the binary's `--host`/`--port`. Other supported families (27B, GLM, MiMo, Laguna) need their own reviewed model/profile entries if added.
-4. Strix Halo requirements: the engine needs `/dev/kfd` and `/dev/dri` access plus a ROCm/HIP stack compatible with the host. IGM executes an argv array, not an interactive shell; add only verified host-specific runtime variables (for example an HSA override) to the model's `env`. Do not guess library paths in the portable example.
-5. Retain the `talus-server` native matcher to detect competing Talus instances. Matchers detect conflicts, not ownership; a match never authorizes signalling an unmanaged process. If a wrapper renames the binary, adjust the matcher to its real executable name and verify detection. Do not match every `python` process.
-6. Restart the actual gateway supervisor only during an authorized idle maintenance window, under external inference admission. Configuration is read at startup; there is no hot-reload API. Restart may load `default.engine`/`default.model`, not the previously unloaded state. Preserve a backup and a verified rollback path.
+Profile `gguf` binds the registered file to both native model arguments and tokenizer in the generated config. It validates GGUF structure and confinement, not compatibility or GPU fit. Other model families and accelerated drafters need separate reviewed profiles with their required companion assets.
+
+Retain `talus-server` **and** `talus-cli` native matchers. They prevent unmanaged conflicts, not grant ownership. Copy the reviewed entries into the existing private gateway configuration, preserving security and other engines. Apply config through an idle, externally admitted supervisor restart with backup and rollback; source examples do not hot-reload an installed gateway.
 
 ## Acceptance
 
-Use the normal [controller procedure](orchestration.md), without printing keys:
+Use the [controller procedure](orchestration.md) with `force:false`: sanitized catalog, explicit selection/load and context readback, confirmed native CLI child, readiness/occupancy, non-streamed/SSE chat and raw completions, actual output/stream termination and busy rejection. Unload/switch normally and verify both exact process identities exited. Restore previous settings when required.
 
-1. Verify `/api/engines` lists the intended configured engines and the enabled Talus model. The catalog must not expose paths, argv or environment values.
-2. Confirm no active requests or unmanaged native engines; select `talus` with `force:false` and read back selection.
-3. Load `qwen3.8-flash-next-talus`, allowing the configured startup timeout. Verify `phase: ready`, exact model ID and native-slot occupancy. HTTP availability while `/health` is not yet 200 is not readiness.
-4. Generate non-streamed chat, SSE chat and raw completions through IGM with the inference credential. Validate the actual response and stream termination, not merely HTTP 200. Exercise required tool-call workflows separately.
-5. While generation is active, verify competing inference/lifecycle requests are refused without forcing a stop. If native occupancy cannot be read, do not downgrade to `gateway_only` to hide the problem.
-6. Unload or switch normally; verify the exact native PID/start-time identity exited and no native processes survived. Restore the pre-test selection/model state when required.
-
-Repository tests cover configured-engine discovery, sanitized model catalog, configuration-based selection, native process conflict detection and identity-verified fixture exit. Fixture tests do **not** certify actual GPU execution. Private real-engine acceptance evidence, runtime library paths and host deployment configuration must remain outside Git.
+Repository tests check catalog/configuration, registration bindings, native matching and an HTTP lifecycle fixture. They do **not** certify native GPU execution or output quality. Keep private host paths and real-engine acceptance evidence outside Git.

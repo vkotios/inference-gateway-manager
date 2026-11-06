@@ -1,7 +1,9 @@
 """Strix Halo engine catalog, configuration and conflict tests; fixtures are not model inference."""
 
 import json
+import shutil
 import signal
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -14,12 +16,14 @@ from fastapi import HTTPException
 from gateway.app import create_app
 from gateway.config import validate
 from gateway.core import Manager, identity, signal_identity
+from gateway.registry import Registry
+from gateway.settings import select
 
 ROOT = Path(__file__).resolve().parents[1]
 STRIX_ENGINES = {"halogen", "halogen-flash", "talus", "strixite"}
 EXPECTED_PROBES = {
-    "halogen": "slots",
-    "halogen-flash": "slots",
+    "halogen": "gateway_only",
+    "halogen-flash": "gateway_only",
     "talus": "slots",
     "strixite": "gateway_only",
 }
@@ -38,7 +42,7 @@ def test_example_config_loads_all_strix_halo_engines():
         assert spec["base_url"].startswith("http://127.0.0.1:80")
         assert spec["context_limits"]["adjustable"] is True
         profile = next(iter(cfg["engines"][engine]["profiles"].values()))
-        assert "{path}" in profile["argv"] or "{path}" in json.dumps(
+        assert any("{path}" in arg for arg in profile["argv"]) or "{path}" in json.dumps(
             profile.get("config_template", {})
         )
     halogen = cfg["engines"]["halogen"]["profiles"]["hgn"]
@@ -84,10 +88,11 @@ async def test_example_catalog_includes_strix_engines_without_private_launch_det
 @pytest.mark.parametrize(
     "engine,executable",
     [
-        ("halogen", "halogen-server"),
-        ("halogen-flash", "halogen-flash-server"),
+        ("halogen", "halogen"),
+        ("halogen-flash", "flash_serve"),
         ("talus", "talus-server"),
-        ("strixite", "strixite"),
+        ("strixite", "strix_server"),
+        ("talus", "talus-cli"),
     ],
 )
 async def test_strix_native_matchers_detect_unmanaged_processes(
@@ -120,7 +125,7 @@ async def test_talus_configured_lifecycle_streams_and_verifies_exit(tmp_path):
     import socket
 
     cfg = example_config()
-    spec = cfg["engines"]["talus"]["models"]["qwen3.8-flash-next-talus"]
+    spec = cfg["engines"]["talus"]["models"]["qwen3.8-27b-talus"]
     assert spec["probe"] == "slots" and spec["ready_path"] == "/health"
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -128,7 +133,7 @@ async def test_talus_configured_lifecycle_streams_and_verifies_exit(tmp_path):
     # Substitute only the unavailable external engine, retaining its probe/API config.
     fixture = str(Path(__file__).with_name("fixture_backend.py"))
     spec.update(
-        argv=[sys.executable, fixture, str(port), str(tmp_path), "{context}"],
+        argv=[sys.executable, fixture, str(port), str(tmp_path), "{context}", "{config_path}"],
         cwd=str(tmp_path),
         base_url=f"http://127.0.0.1:{port}",
     )
@@ -144,16 +149,19 @@ async def test_talus_configured_lifecycle_streams_and_verifies_exit(tmp_path):
             headers={"Authorization": "Bearer " + "a" * 32},
         ) as client:
             assert (await client.post("/api/engine", json={"engine": "talus"})).status_code == 200
-            loaded = await client.post("/api/model", json={"model": "qwen3.8-flash-next-talus"})
+            loaded = await client.post("/api/model", json={"model": "qwen3.8-27b-talus"})
             assert loaded.status_code == 200
             process = app.state.manager.process
+            launch = json.loads(app.state.manager.launch_config_path.read_text())
+            assert launch["exe"] == "/opt/talus/bin/talus-cli"
+            assert launch["args"][launch["args"].index("--ctx") + 1] == "32768"
             state = (await client.get("/api/status")).json()
             assert state["phase"] == "ready" and state["native_busy"] is False
             assert state["occupancy_source"] == "native_slots_and_gateway"
             response = await client.post(
                 "/v1/chat/completions",
                 headers={"Authorization": "Bearer " + "b" * 32},
-                json={"model": "qwen3.8-flash-next-talus", "messages": [], "stream": True},
+                json={"model": "qwen3.8-27b-talus", "messages": [], "stream": True},
             )
             assert response.status_code == 200
             assert response.text == "data: fixture\n\ndata: [DONE]\n\n"
@@ -169,15 +177,14 @@ async def test_talus_configured_lifecycle_streams_and_verifies_exit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_strixite_native_matcher_detects_real_unmanaged_process(tmp_path):
+@pytest.mark.parametrize(
+    "executable", ["halogen", "flash_serve", "talus-server", "talus-cli", "strix_server"]
+)
+async def test_actual_executable_names_detect_real_unmanaged_processes(tmp_path, executable):
     cfg = example_config()
-    process = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)", "/opt/strixite/bin/strixite"],
-        start_new_session=True,
-        executable=sys.executable,
-    )
-    # The interpreter cannot rename its own exe; match on argv identity instead.
-    cfg["native_matchers"] = [{"argv_contains": "/opt/strixite/bin/strixite"}]
+    binary = tmp_path / executable
+    shutil.copy2("/bin/sleep", binary)
+    process = subprocess.Popen([str(binary), "30"], start_new_session=True)
     manager = Manager(cfg, tmp_path)
     try:
         assert identity(process.pid) in manager.native_processes()
@@ -191,3 +198,70 @@ async def test_strixite_native_matcher_detects_real_unmanaged_process(tmp_path):
             signal_identity(item, signal.SIGTERM)
         process.wait(timeout=3)
         await manager.close()
+
+
+@pytest.mark.parametrize("engine", ["halogen", "halogen-flash", "talus", "strixite"])
+def test_profiles_bind_artifacts_and_context_without_losing_companions(tmp_path, engine):
+    cfg = example_config()
+    cfg["model_roots"] = {"models": str(tmp_path)}
+    profile_id, profile = next(iter(cfg["engines"][engine]["profiles"].items()))
+    suffix = {"halogen": ".hgn", "halogen-flash": ".hgn", "talus": ".gguf", "strixite": ".strixw"}[
+        engine
+    ]
+    model = tmp_path / ("weights" + suffix)
+    model.write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, 0) if suffix == ".gguf" else b"fixture")
+    for name in profile.get("required_files", []):
+        (tmp_path / name).write_bytes(b"fixture")
+    artifacts = {}
+    for name, declaration in profile.get("artifacts", {}).items():
+        if declaration["kind"] == "directory":
+            path = tmp_path / name
+            path.mkdir()
+            for required in declaration["required_files"]:
+                (path / required).write_text("{}")
+        else:
+            path = tmp_path / (name + declaration["extensions"][0])
+            path.write_bytes(b"fixture")
+        artifacts[name] = str(path)
+    registry = Registry(cfg, tmp_path / "state")
+    record = {
+        "engine": engine,
+        "profile": profile_id,
+        "path": str(model),
+        "model": "registered-test",
+        "artifacts": artifacts,
+    }
+    _, spec, _ = registry.inspect(record)
+    chosen, active = select(spec, context=65536)
+    rendered = json.dumps(
+        {key: value for key, value in chosen.items() if key != "_config_template"}
+    )
+    assert str(model) in rendered
+    assert "{path}" not in rendered and "{artifact." not in rendered and "{context}" not in rendered
+    assert active["context"] == 65536
+    if engine.startswith("halogen"):
+        argv = chosen["argv"]
+        assert "HALOGEN_CHECKPOINT=" + str(model) in argv
+        assert "HALOGEN_TOKENIZER=" + artifacts["tokenizer"] in argv
+        context_var = "HALOGEN_CTX" if engine == "halogen-flash" else "HALOGEN_SLOT_CTX"
+        assert context_var + "=65536" in argv
+        assert argv[-1] == "all"
+        assert chosen["probe"] == "gateway_only"
+    elif engine == "talus":
+        assert chosen["config_template"]["exe"] == "/opt/talus/bin/talus-cli"
+        assert chosen["config_template"]["tokenizer"] == str(model)
+        assert "--slots" not in chosen["argv"]
+    else:
+        assert chosen["argv"][0].endswith("/strix_server")
+        assert chosen["argv"][chosen["argv"].index("--weights") + 1] == str(model)
+        assert chosen["argv"][chosen["argv"].index("--capacity") + 1] == "65536"
+    # A valid checkpoint alone must not permit registration with missing required assets.
+    if artifacts:
+        first = next(iter(artifacts.values()))
+        path = Path(first)
+        if path.is_dir():
+            next(path.iterdir()).unlink()
+        else:
+            path.unlink()
+        with pytest.raises(HTTPException):
+            registry.inspect(record)

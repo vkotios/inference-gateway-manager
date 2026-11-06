@@ -95,10 +95,10 @@ The [example configuration](examples/config.example.json) exposes eleven engine 
 | Gufo | `gufo` | GGUF, optionally with DFlash2 companions | Native slots + gateway requests |
 | Lucebox | `lucebox` | DeepSeek V4 GGUF without a draft | Gateway requests only |
 | ds4a (ds4fa fork) | `ds4a` | DeepSeek V4 Flash GGUF + native DSpark support GGUF | Gateway requests only |
-| Halogen | `halogen` | Qwen3.8 27B `.hgn` pack in a Podman/Docker container | Native slots + gateway requests |
-| Halogen Flash | `halogen-flash` | Qwen3.8-Flash-Next `.hgn` pack in a Podman/Docker container | Native slots + gateway requests |
-| Talus | `talus` | GGUF (Qwen3.8-Flash-Next and other Strix Halo families) | Native slots + gateway requests |
-| Strixite | `strixite` | Qwen3.8-Flash-Next GGUF | Gateway requests only |
+| Halogen | `halogen` | Qwen3.8 27B `.hgn` checkpoint + tokenizer in Podman | Gateway requests only |
+| Halogen Flash | `halogen-flash` | Qwen3.8-Flash-Next `.hgn` checkpoint + lookup table in Podman | Gateway requests only |
+| Talus | `talus` | Qwen3.8 27B GGUF via `talus-server` + `talus-cli` | Native slots + gateway requests |
+| Strixite | `strixite` | Qwen3.8-Flash-Next converted `.strixw` + tokenizer/ngram assets | Gateway requests only |
 
 **ds4 and ds4a remain separate options.** The existing ds4 entry retains its `dwarfstar` ID and launch configuration. The `ds4a` entry uses the ds4fa fork and its own executable path, backend port and model ID.
 

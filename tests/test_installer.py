@@ -71,6 +71,8 @@ def test_model_path_rewrite_respects_directory_boundaries():
         "{artifact.draft}",
         "/opt/models:/opt/models:ro",
         "127.0.0.1:8086:8086",
+        "HALOGEN_CHECKPOINT=/opt/models/qwen/model.hgn",
+        "HALOGEN_TOKENIZER=/opt/models-old/tokenizer",
     ]
     assert _rewrite(value, Path("/data/models")) == [
         "/data/models",
@@ -79,6 +81,8 @@ def test_model_path_rewrite_respects_directory_boundaries():
         "{artifact.draft}",
         "/data/models:/data/models:ro",
         "127.0.0.1:8086:8086",
+        "HALOGEN_CHECKPOINT=/data/models/qwen/model.hgn",
+        "HALOGEN_TOKENIZER=/opt/models-old/tokenizer",
     ]
 
 

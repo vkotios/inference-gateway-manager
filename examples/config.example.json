@@ -50,16 +50,22 @@
       "exe": "ds4fa-server"
     },
     {
-      "exe": "halogen-server"
-    },
-    {
-      "exe": "halogen-flash-server"
-    },
-    {
       "exe": "talus-server"
     },
     {
-      "exe": "strixite"
+      "exe": "halogen"
+    },
+    {
+      "exe": "flash_serve"
+    },
+    {
+      "exe": "strix_server"
+    },
+    {
+      "exe": "talus-cli"
+    },
+    {
+      "argv_contains": "/halogen/tools/serve_api.py"
     }
   ],
   "engines": {
@@ -940,31 +946,35 @@
             "--device",
             "/dev/dri",
             "--group-add",
-            "render",
+            "keep-groups",
             "--security-opt",
             "label=disable",
+            "--security-opt",
+            "seccomp=unconfined",
+            "--ipc=host",
+            "--ulimit",
+            "memlock=-1:-1",
             "-e",
             "IGM_ENGINE_RUN_ID={launch_id}",
+            "-e",
+            "HALOGEN_CHECKPOINT=/opt/models/halogen-qwen38-27b/qwen3.8-27b-p1w4d-d2.hgn",
+            "-e",
+            "HALOGEN_TOKENIZER=/opt/models/halogen-qwen38-27b/tokenizer",
+            "-e",
+            "HALOGEN_SLOT_CTX={context}",
+            "-e",
+            "HALOGEN_MODEL_ID=qwen3.8-27b-halogen",
             "-p",
-            "127.0.0.1:8086:8086",
+            "127.0.0.1:8086:8731",
             "-v",
             "/opt/models:/opt/models:ro",
-            "ghcr.io/peonist-ai/halogen-server:latest",
-            "serve",
-            "--model",
-            "/opt/models/qwen3.8-27b.hgn",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8086",
-            "--ctx",
-            "{context}",
-            "--slots"
+            "ghcr.io/peonist-ai/halogen:0.1.4",
+            "all"
           ],
           "base_url": "http://127.0.0.1:8086",
           "context": 32768,
           "ready_path": "/health",
-          "probe": "slots",
+          "probe": "gateway_only",
           "context_limits": {
             "min": 4096,
             "max": 131072,
@@ -997,31 +1007,35 @@
             "--device",
             "/dev/dri",
             "--group-add",
-            "render",
+            "keep-groups",
             "--security-opt",
             "label=disable",
+            "--security-opt",
+            "seccomp=unconfined",
+            "--ipc=host",
+            "--ulimit",
+            "memlock=-1:-1",
             "-e",
             "IGM_ENGINE_RUN_ID={launch_id}",
+            "-e",
+            "HALOGEN_CHECKPOINT={path}",
+            "-e",
+            "HALOGEN_TOKENIZER={artifact.tokenizer}",
+            "-e",
+            "HALOGEN_SLOT_CTX={context}",
+            "-e",
+            "HALOGEN_MODEL_ID={model}",
             "-p",
-            "127.0.0.1:8086:8086",
+            "127.0.0.1:8086:8731",
             "-v",
             "/opt/models:/opt/models:ro",
-            "ghcr.io/peonist-ai/halogen-server:latest",
-            "serve",
-            "--model",
-            "{path}",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8086",
-            "--ctx",
-            "{context}",
-            "--slots"
+            "ghcr.io/peonist-ai/halogen:0.1.4",
+            "all"
           ],
           "base_url": "http://127.0.0.1:8086",
           "context": 32768,
           "ready_path": "/health",
-          "probe": "slots",
+          "probe": "gateway_only",
           "context_limits": {
             "min": 4096,
             "max": 131072,
@@ -1034,6 +1048,15 @@
               131072
             ],
             "adjustable": true
+          },
+          "artifacts": {
+            "tokenizer": {
+              "kind": "directory",
+              "required_files": [
+                "tokenizer.json",
+                "chat_template.jinja"
+              ]
+            }
           }
         }
       }
@@ -1053,31 +1076,35 @@
             "--device",
             "/dev/dri",
             "--group-add",
-            "render",
+            "keep-groups",
             "--security-opt",
             "label=disable",
+            "--security-opt",
+            "seccomp=unconfined",
+            "--ipc=host",
+            "--ulimit",
+            "memlock=-1:-1",
             "-e",
             "IGM_ENGINE_RUN_ID={launch_id}",
+            "-e",
+            "HALOGEN_CHECKPOINT=/opt/models/halogen-qwen38-flash-next/qwen38-flash-next-v2.hgn",
+            "-e",
+            "HALOGEN_TOKENIZER=/opt/models/halogen-qwen38-flash-next/tokenizer",
+            "-e",
+            "HALOGEN_CTX={context}",
+            "-e",
+            "HALOGEN_MODEL_ID=qwen3.8-flash-next-halogen-flash",
             "-p",
-            "127.0.0.1:8087:8087",
+            "127.0.0.1:8087:8731",
             "-v",
             "/opt/models:/opt/models:ro",
-            "ghcr.io/peonist-ai/halogen-flash-server:latest",
-            "serve",
-            "--model",
-            "/opt/models/qwen3.8-flash-next.hgn",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8087",
-            "--ctx",
-            "{context}",
-            "--slots"
+            "ghcr.io/peonist-ai/halogen-flash-server:0.19.1",
+            "all"
           ],
           "base_url": "http://127.0.0.1:8087",
           "context": 32768,
           "ready_path": "/health",
-          "probe": "slots",
+          "probe": "gateway_only",
           "context_limits": {
             "min": 4096,
             "max": 131072,
@@ -1110,31 +1137,35 @@
             "--device",
             "/dev/dri",
             "--group-add",
-            "render",
+            "keep-groups",
             "--security-opt",
             "label=disable",
+            "--security-opt",
+            "seccomp=unconfined",
+            "--ipc=host",
+            "--ulimit",
+            "memlock=-1:-1",
             "-e",
             "IGM_ENGINE_RUN_ID={launch_id}",
+            "-e",
+            "HALOGEN_CHECKPOINT={path}",
+            "-e",
+            "HALOGEN_TOKENIZER={artifact.tokenizer}",
+            "-e",
+            "HALOGEN_CTX={context}",
+            "-e",
+            "HALOGEN_MODEL_ID={model}",
             "-p",
-            "127.0.0.1:8087:8087",
+            "127.0.0.1:8087:8731",
             "-v",
             "/opt/models:/opt/models:ro",
-            "ghcr.io/peonist-ai/halogen-flash-server:latest",
-            "serve",
-            "--model",
-            "{path}",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8087",
-            "--ctx",
-            "{context}",
-            "--slots"
+            "ghcr.io/peonist-ai/halogen-flash-server:0.19.1",
+            "all"
           ],
           "base_url": "http://127.0.0.1:8087",
           "context": 32768,
           "ready_path": "/health",
-          "probe": "slots",
+          "probe": "gateway_only",
           "context_limits": {
             "min": 4096,
             "max": 131072,
@@ -1147,25 +1178,37 @@
               131072
             ],
             "adjustable": true
-          }
+          },
+          "artifacts": {
+            "tokenizer": {
+              "kind": "directory",
+              "required_files": [
+                "tokenizer.json",
+                "chat_template.jinja"
+              ]
+            }
+          },
+          "required_files": [
+            "qwen38-flash-next-ngram.hgn",
+            "qwen38-flash-next-vision.hgn"
+          ]
         }
       }
     },
     "talus": {
       "label": "Talus",
       "models": {
-        "qwen3.8-flash-next-talus": {
+        "qwen3.8-27b-talus": {
           "argv": [
             "/opt/talus/bin/talus-server",
-            "--model",
-            "/opt/models/qwen3.8-flash-next.gguf",
+            "--config",
+            "{config_path}",
             "--host",
             "127.0.0.1",
             "--port",
             "8088",
             "--ctx-size",
-            "{context}",
-            "--slots"
+            "{context}"
           ],
           "base_url": "http://127.0.0.1:8088",
           "context": 32768,
@@ -1184,6 +1227,28 @@
               262144
             ],
             "adjustable": true
+          },
+          "config_template": {
+            "exe": "/opt/talus/bin/talus-cli",
+            "args": [
+              "--model",
+              "/opt/models/qwen3.8-27b.gguf",
+              "--ctx",
+              "{context}",
+              "--no-mtp"
+            ],
+            "tokenizer": "/opt/models/qwen3.8-27b.gguf",
+            "model_name": "qwen3.8-27b-talus",
+            "stop_tokens": [
+              "<|im_end|>"
+            ],
+            "sampling": {
+              "temperature": 0.8,
+              "top_p": 0.95,
+              "top_k": 40,
+              "min_p": 0.05
+            },
+            "env": {}
           }
         }
       },
@@ -1192,15 +1257,14 @@
           "format": "gguf",
           "argv": [
             "/opt/talus/bin/talus-server",
-            "--model",
-            "{path}",
+            "--config",
+            "{config_path}",
             "--host",
             "127.0.0.1",
             "--port",
             "8088",
             "--ctx-size",
-            "{context}",
-            "--slots"
+            "{context}"
           ],
           "base_url": "http://127.0.0.1:8088",
           "context": 32768,
@@ -1219,6 +1283,28 @@
               262144
             ],
             "adjustable": true
+          },
+          "config_template": {
+            "exe": "/opt/talus/bin/talus-cli",
+            "args": [
+              "--model",
+              "{path}",
+              "--ctx",
+              "{context}",
+              "--no-mtp"
+            ],
+            "tokenizer": "{path}",
+            "model_name": "{model}",
+            "stop_tokens": [
+              "<|im_end|>"
+            ],
+            "sampling": {
+              "temperature": 0.8,
+              "top_p": 0.95,
+              "top_k": 40,
+              "min_p": 0.05
+            },
+            "env": {}
           }
         }
       }
@@ -1228,14 +1314,22 @@
       "models": {
         "qwen3.8-flash-next-strixite": {
           "argv": [
-            "/opt/strixite/bin/strixite",
-            "--model",
-            "/opt/models/qwen3.8-flash-next.gguf",
+            "/opt/strixite/bin/strix_server",
+            "--weights",
+            "/opt/models/strixite/weights.strixw",
+            "--ngram",
+            "/opt/models/strixite/ngram.table",
+            "--tokenizer",
+            "/opt/models/strixite/tokenizer/tokenizer.json",
+            "--generation-config",
+            "/opt/models/strixite/tokenizer/generation_config.json",
+            "--vision",
+            "off",
             "--host",
             "127.0.0.1",
             "--port",
             "8089",
-            "--ctx",
+            "--capacity",
             "{context}"
           ],
           "base_url": "http://127.0.0.1:8089",
@@ -1258,17 +1352,25 @@
         }
       },
       "profiles": {
-        "gguf": {
-          "format": "gguf",
+        "strixw": {
+          "format": "native",
           "argv": [
-            "/opt/strixite/bin/strixite",
-            "--model",
+            "/opt/strixite/bin/strix_server",
+            "--weights",
             "{path}",
+            "--ngram",
+            "{artifact.ngram}",
+            "--tokenizer",
+            "{artifact.tokenizer}/tokenizer.json",
+            "--generation-config",
+            "{artifact.tokenizer}/generation_config.json",
+            "--vision",
+            "off",
             "--host",
             "127.0.0.1",
             "--port",
             "8089",
-            "--ctx",
+            "--capacity",
             "{context}"
           ],
           "base_url": "http://127.0.0.1:8089",
@@ -1287,6 +1389,24 @@
               131072
             ],
             "adjustable": true
+          },
+          "extensions": [
+            ".strixw"
+          ],
+          "artifacts": {
+            "tokenizer": {
+              "kind": "directory",
+              "required_files": [
+                "tokenizer.json",
+                "generation_config.json"
+              ]
+            },
+            "ngram": {
+              "kind": "file",
+              "extensions": [
+                ".table"
+              ]
+            }
           }
         }
       }
