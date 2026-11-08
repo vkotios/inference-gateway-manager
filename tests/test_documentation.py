@@ -25,6 +25,10 @@ def test_new_documentation_links_resolve():
         ROOT / "docs/branding.md",
         ROOT / "docs/lucebox-ds4a.md",
         ROOT / "docs/engine-updates.md",
+        *[
+            ROOT / "docs" / (engine + ".md")
+            for engine in ("halogen", "halogen-flash", "talus", "strixite")
+        ],
         ROOT / "skills/inference-gateway-manager/SKILL.md",
         ROOT / "skills/inference-gateway-manager/references/context-sizing.md",
     ]

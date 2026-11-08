@@ -1,6 +1,6 @@
 # Lucebox and ds4a integration
 
-The public example offers seven independent engine selections: `llama`, `strata`, `kyojin`, `dwarfstar`, `gufo`, `lucebox` and `ds4a`. The existing **ds4 / DwarfStar entry retains its `dwarfstar` engine ID**, model ID and launch profile unchanged. `ds4a` is the gateway ID for [julianmb/ds4fa](https://github.com/julianmb/ds4fa), a separate ds4 fork; it does not replace ds4. [Lucebox](https://github.com/Luce-Org/lucebox) is another independent runtime.
+The public example offers eleven independent engine selections: `llama`, `strata`, `kyojin`, `dwarfstar`, `gufo`, `lucebox`, `ds4a`, `halogen`, `halogen-flash`, `talus` and `strixite`. The existing **ds4 / DwarfStar entry retains its `dwarfstar` engine ID**, model ID and launch profile unchanged. `ds4a` is the gateway ID for [julianmb/ds4fa](https://github.com/julianmb/ds4fa), a separate ds4 fork; it does not replace ds4. [Lucebox](https://github.com/Luce-Org/lucebox) is another independent runtime.
 
 The dashboard, HTTP catalog and MCP engine discovery use the administrator configuration. Selecting an engine does not start it. Registration adds a model without loading it. Only an explicit model load starts the configured process; inference never loads or resizes an engine automatically. The new example models are disabled and no startup default is added.
 

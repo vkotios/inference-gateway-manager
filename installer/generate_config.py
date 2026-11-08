@@ -21,10 +21,22 @@ EXAMPLE_MODEL_ROOT = "/opt/models"
 
 
 def _rewrite(value, models_dir):
-    if isinstance(value, str) and (
-        value == EXAMPLE_MODEL_ROOT or value.startswith(EXAMPLE_MODEL_ROOT + "/")
-    ):
-        return str(models_dir / Path(value).relative_to(EXAMPLE_MODEL_ROOT))
+    if isinstance(value, str):
+        # Podman binds and `-e NAME=/opt/models/...` must follow the chosen root.
+        key, equals, rest = value.partition("=")
+        assignment = equals and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+        prefix = key + "=" if assignment else ""
+        segments = (rest if assignment else value).split(":")
+        if any(
+            segment == EXAMPLE_MODEL_ROOT or segment.startswith(EXAMPLE_MODEL_ROOT + "/")
+            for segment in segments
+        ):
+            return prefix + ":".join(
+                str(models_dir / Path(segment).relative_to(EXAMPLE_MODEL_ROOT))
+                if segment == EXAMPLE_MODEL_ROOT or segment.startswith(EXAMPLE_MODEL_ROOT + "/")
+                else segment
+                for segment in segments
+            )
     if isinstance(value, list):
         return [_rewrite(item, models_dir) for item in value]
     if isinstance(value, dict):
