@@ -27,6 +27,8 @@ async def test_mcp_tools_only_offer_normal_control_and_bounded_delegation():
             "gateway_catalog",
             "gateway_status",
             "gateway_telemetry",
+            "gateway_services",
+            "gateway_footprints",
             "gateway_load",
             "gateway_unload",
             "gateway_delegate",
@@ -43,6 +45,30 @@ async def test_mcp_tools_only_offer_normal_control_and_bounded_delegation():
 
 
 @pytest.mark.asyncio
+async def test_service_and_footprint_tools_are_read_only_gets_with_no_arguments():
+    from gateway.client import GatewayClient
+    from gateway.mcp import create_server
+
+    seen = []
+
+    def backend(request):
+        seen.append((request.method, request.url.path, request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    async with GatewayClient(
+        "http://gateway.lan", "a" * 32, transport=httpx.MockTransport(backend)
+    ) as client:
+        server = create_server(client)
+        tools = {t.name: t for t in await server.list_tools()}
+        for name in ("gateway_services", "gateway_footprints"):
+            assert tools[name].inputSchema.get("properties", {}) == {}
+            assert tools[name].annotations.readOnlyHint is True
+            await server.call_tool(name, {})
+        assert "footprints" in tools["gateway_load"].description
+    assert seen == [("GET", "/api/services", b""), ("GET", "/api/footprints", b"")]
+
+
+@pytest.mark.asyncio
 async def test_real_stdio_exchange_lists_tools_and_reports_connection_failure_safely():
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -56,7 +82,7 @@ async def test_real_stdio_exchange_lists_tools_and_reports_connection_failure_sa
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 6
+            assert len(tools.tools) == 8
             result = await session.call_tool("gateway_status", {})
             assert result.isError
             rendered = json.dumps(result.model_dump(mode="json"))

@@ -98,9 +98,19 @@ if [[ "$SERVICE_MODE" == user ]]; then
   USER_UNIT="$USER_UNIT_DIR/$SERVICE_NAME"
   [[ ! -e "$USER_UNIT" && ! -L "$USER_UNIT" ]] || { echo "Existing user unit; refusing to overwrite it." >&2; exit 1; }
 fi
+say "Optional CPU services"
+echo "Transcription (faster-whisper) and embeddings (sentence-transformers) can run on the CPU next to the chat model."
+echo "This installs several Python packages, including CPU-only PyTorch (hundreds of MB), into the gateway environment."
+echo "It needs ffmpeg and prlimit on the host. No model is downloaded, and nothing loads automatically."
+ask_yes_no "Install the optional transcription and embeddings packages?" no; INSTALL_AUX="$ANSWER"
+if [[ "$INSTALL_AUX" == yes ]]; then
+  for tool in ffmpeg prlimit; do
+    command -v "$tool" >/dev/null || echo "  Missing on this host: $tool (install it with your OS package manager before loading a transcription model)."
+  done
+fi
 say "Installation summary"
-printf 'Install: %s\nModels: %s\nEngines: %s\nBind IP: %s\nAllowed network: %s\nService: %s\nGateway restart: %s\nHost reboot: %s\n' \
-  "$INSTALL_DIR" "$MODELS_DIR" "${SELECTED[*]}" "$BIND_IP" "$NETWORK" "$SERVICE_MODE" "$RESTART_GATEWAY" "$REBOOT_HOST"
+printf 'Install: %s\nModels: %s\nEngines: %s\nBind IP: %s\nAllowed network: %s\nService: %s\nGateway restart: %s\nHost reboot: %s\nCPU services packages: %s\n' \
+  "$INSTALL_DIR" "$MODELS_DIR" "${SELECTED[*]}" "$BIND_IP" "$NETWORK" "$SERVICE_MODE" "$RESTART_GATEWAY" "$REBOOT_HOST" "$INSTALL_AUX"
 printf 'Additional allowed host: %s\n' "${EXTRA_HOST:-none}"
 echo "All example models stay disabled. Configure installed engine paths, register weights, then explicitly load."
 echo "MCP belongs on a separate client computer; no host MCP extra is installed."
@@ -122,6 +132,11 @@ python3 "$REPO_ROOT/installer/setup_files.py" copy --source "$REPO_ROOT" --targe
 mkdir -p "$MODELS_DIR"
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install "$INSTALL_DIR"
+if [[ "$INSTALL_AUX" == yes ]]; then
+  say "Installing optional transcription and embeddings packages (CPU-only PyTorch)"
+  "$VENV_DIR/bin/python" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+  "$VENV_DIR/bin/python" -m pip install "$INSTALL_DIR[auxiliary]"
+fi
 CONFIG_ARGS=(--output "$CONFIG_FILE" --models-dir "$MODELS_DIR" --host "$BIND_IP" --allowed-network "$NETWORK")
 if [[ -n "$EXTRA_HOST" ]]; then CONFIG_ARGS+=(--allowed-host "$EXTRA_HOST"); fi
 for engine in "${SELECTED[@]}"; do CONFIG_ARGS+=(--engine "$engine"); done
@@ -162,6 +177,9 @@ fi
 say "Next steps"
 printf 'Configuration: %s\nPrivate keys: %s\n' "$CONFIG_FILE" "$CREDS_FILE"
 echo "Review executable paths and model artifacts; register compatible weights in the dashboard."
+if [[ "$INSTALL_AUX" == yes ]]; then
+  echo "CPU services: download the Whisper and embedding models yourself, add them under \"auxiliary\" in the config, then enable and load them in the dashboard. See docs/auxiliary-services.md."
+fi
 echo "The control key manages lifecycle; give inference clients only the inference key. Never share the credential file."
 if [[ "$BIND_IP" == *:* ]]; then ORIGIN="http://[$BIND_IP]:9000"; else ORIGIN="http://$BIND_IP:9000"; fi
 printf 'Dashboard and MCP gateway URL: %s\nInference API base URL: %s/v1\n' "$ORIGIN" "$ORIGIN"

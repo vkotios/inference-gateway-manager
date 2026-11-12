@@ -25,7 +25,10 @@ def create_server(client):
             "Discover engines and inspect status before explicitly loading a model. "
             "Loads and unloads never force or interrupt busy work. Reuse selection_id when "
             "delegating; a conflict requires inspection, not automatic retry. Delegation "
-            "returns a worker answer using only supplied context; it does not edit files."
+            "returns a worker answer using only supplied context; it does not edit files. "
+            "Loading a chat model can unload the CPU transcription and embedding services to "
+            "make room, so check gateway_services and gateway_footprints first when other "
+            "clients depend on them."
         ),
     )
     read = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
@@ -48,6 +51,19 @@ def create_server(client):
         """Read measured host memory and GPU counters; unavailable counters stay unknown."""
         return await client.telemetry()
 
+    @server.tool(annotations=read)
+    async def gateway_services() -> dict:
+        """Inspect the CPU transcription and embedding services: enabled and loaded state,
+        whether a service was unloaded to make room for the chat model, and the restore policy."""
+        return await client.services()
+
+    @server.tool(annotations=read)
+    async def gateway_footprints() -> dict:
+        """Read recorded memory footprints and, for each chat model, whether it is calibrated
+        and whether it fits with the services that are loaded now. A model that is not
+        calibrated unloads the services when it loads."""
+        return await client.footprints()
+
     @server.tool(annotations=change)
     async def gateway_load(
         engine: str,
@@ -61,6 +77,8 @@ def create_server(client):
         Context changes restart the engine; reasoning is a client-overridable default.
         System prompts prepend client instructions; omit to retain, or pass empty text to clear.
         Return and preserve selection_id for subsequent delegation. Loading can take minutes.
+        Loading a model can unload the CPU transcription and embedding services when they do not
+        fit with it (or its memory footprint is not recorded); see gateway_footprints first.
         """
         return await client.load(
             engine, model, context=context, reasoning=reasoning, system_prompt=system_prompt

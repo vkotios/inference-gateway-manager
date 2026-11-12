@@ -183,8 +183,13 @@ async def test_talus_configured_lifecycle_streams_and_verifies_exit(tmp_path):
 async def test_actual_executable_names_detect_real_unmanaged_processes(tmp_path, executable):
     cfg = example_config()
     binary = tmp_path / executable
-    shutil.copy2("/bin/sleep", binary)
-    process = subprocess.Popen([str(binary), "30"], start_new_session=True)
+    # Copy a shell, not sleep: some distributions ship sleep inside a multi-call binary that picks
+    # its applet from its own file name and exits for an engine's name. A shell ignores its name,
+    # and `read` is a builtin, so the copy blocks on its stdin without starting a child process.
+    shutil.copy2("/bin/sh", binary)
+    process = subprocess.Popen(
+        [str(binary), "-c", "read line"], stdin=subprocess.PIPE, start_new_session=True
+    )
     manager = Manager(cfg, tmp_path)
     try:
         assert identity(process.pid) in manager.native_processes()
@@ -197,6 +202,7 @@ async def test_actual_executable_names_detect_real_unmanaged_processes(tmp_path,
         if item:
             signal_identity(item, signal.SIGTERM)
         process.wait(timeout=3)
+        process.stdin.close()
         await manager.close()
 
 
