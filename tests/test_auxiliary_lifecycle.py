@@ -3,6 +3,7 @@
 import asyncio
 import io
 import json
+import shutil
 import socket
 import sys
 import wave
@@ -357,6 +358,10 @@ async def test_drain_timeout_stops_the_worker_and_reports_unloaded(tmp_path, mon
 # ---- reservations ---------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("prlimit")),
+    reason="decoding the uploaded audio needs ffmpeg and prlimit",
+)
 async def test_transcription_reservations_are_sequential_not_nested(tmp_path, monkeypatch):
     e = Env(tmp_path, monkeypatch, total=3 * GIB)
     e.config["auxiliary"]["host_baseline_bytes"] = 1  # isolate the live-admission check

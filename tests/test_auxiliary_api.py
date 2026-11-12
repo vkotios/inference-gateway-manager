@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import shutil
 import struct
 import sys
 import wave
@@ -13,6 +14,10 @@ from fastapi import HTTPException
 from gateway.app import create_app
 
 
+@pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("prlimit")),
+    reason="decoding the uploaded audio needs ffmpeg and prlimit",
+)
 @pytest.mark.asyncio
 async def test_services_control_auth_inference_and_memory_gate(tmp_path, monkeypatch):
     path = str(tmp_path)

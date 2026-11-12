@@ -184,7 +184,9 @@ async def test_actual_executable_names_detect_real_unmanaged_processes(tmp_path,
     cfg = example_config()
     binary = tmp_path / executable
     shutil.copy2("/bin/sleep", binary)
-    process = subprocess.Popen([str(binary), "30"], start_new_session=True)
+    # Some distributions ship sleep as a multi-call binary that dispatches on argv[0], so keep
+    # argv[0] as "sleep" while the executable file (which the matcher sees) has the engine's name.
+    process = subprocess.Popen(["sleep", "30"], executable=str(binary), start_new_session=True)
     manager = Manager(cfg, tmp_path)
     try:
         assert identity(process.pid) in manager.native_processes()
