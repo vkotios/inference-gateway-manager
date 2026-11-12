@@ -84,6 +84,7 @@ class Manager:
         self.launch_id = None
         # Set by the API layer when a maintenance lease directory is configured.
         self.lease_guard = None
+        self.auxiliary = None
         self.update_blocked = False
         self.update_authorized = ContextVar("igm_update_authorized", default=False)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=5), trust_env=False)
@@ -414,6 +415,8 @@ class Manager:
     ):
         async with self.lock:
             self.check_update()
+            if self.auxiliary is not None and self.auxiliary.active():
+                raise HTTPException(409, "Unload auxiliary models before changing the chat model")
             target_engine, spec, settings = self.prepare_model(
                 model, engine, context, reasoning, system_prompt
             )

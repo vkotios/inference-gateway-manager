@@ -23,6 +23,46 @@ def validate(config):
         raise ValueError("recovery accepts only restart_gateway/reboot_host boolean options")
     if "maintenance" in config:
         validate_options(config["maintenance"])
+    auxiliary = config.get("auxiliary", {})
+    if not isinstance(auxiliary, dict) or set(auxiliary) - {
+        "minimum_free_bytes",
+        "chat_growth_bytes",
+        "worker_python",
+        "transcription",
+        "embeddings",
+    }:
+        raise ValueError("Invalid auxiliary service configuration")
+    for key in ("minimum_free_bytes", "chat_growth_bytes"):
+        if key in auxiliary and (type(auxiliary[key]) is not int or auxiliary[key] <= 0):
+            raise ValueError(f"{key} must be a positive integer")
+    if "worker_python" in auxiliary and (
+        not isinstance(auxiliary["worker_python"], str)
+        or not Path(auxiliary["worker_python"]).is_absolute()
+    ):
+        raise ValueError("worker_python must be an absolute path")
+    auxiliary_names = set()
+    for name in ("transcription", "embeddings"):
+        service = auxiliary.get(name, {})
+        if not isinstance(service, dict) or set(service) - {"models"}:
+            raise ValueError("Invalid auxiliary service")
+        models = service.get("models", {})
+        if not isinstance(models, dict):
+            raise ValueError("Auxiliary models must be an object")
+        for model_id, spec in models.items():
+            if not isinstance(model_id, str) or not model_id or not isinstance(spec, dict):
+                raise ValueError("Invalid auxiliary model")
+            if model_id in auxiliary_names:
+                raise ValueError("Auxiliary model IDs must be unique")
+            auxiliary_names.add(model_id)
+            if set(spec) - {"path", "load_bytes", "request_bytes", "threads"}:
+                raise ValueError("Invalid auxiliary model fields")
+            if not isinstance(spec.get("path"), str) or not Path(spec["path"]).is_absolute():
+                raise ValueError("Auxiliary model path must be absolute")
+            for key in ("load_bytes", "request_bytes"):
+                if type(spec.get(key)) is not int or spec[key] <= 0:
+                    raise ValueError("Auxiliary model budgets must be positive integers")
+            if type(spec.get("threads", 4)) is not int or not 1 <= spec.get("threads", 4) <= 64:
+                raise ValueError("Auxiliary threads must be between 1 and 64")
     browser = config.get("browser_auth", {})
     if (
         not isinstance(browser, dict)
@@ -77,7 +117,7 @@ def validate(config):
         for name, path in roots.items()
     ):
         raise ValueError("model_roots must map safe IDs to absolute host directories")
-    seen = set()
+    seen = set(auxiliary_names)
     for name, engine in engines.items():
         if not re.fullmatch(r"[a-zA-Z0-9_.-]+", name):
             raise ValueError("Invalid engine ID")

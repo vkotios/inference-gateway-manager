@@ -1,11 +1,14 @@
 """Authenticated control API. Inference and control credentials are separate."""
 
 import asyncio
+import base64
 import hmac
 import ipaddress
 import json
 import logging
 import math
+import struct
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -19,6 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from . import __version__
+from .aux_audio import decode_audio
+from .auxiliary import Auxiliary
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
 from .core import Manager, finish_cleanup
 from .lucebox_metrics import LuceboxMetrics
@@ -87,6 +92,11 @@ class UpdateAction(BaseModel):
     test_models: list[str] | None = None
 
 
+class AuxiliarySelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str | None = None
+
+
 class InferenceLifetime:
     """Track the outer ASGI task, including socket drain after generator yield."""
 
@@ -114,6 +124,7 @@ def create_app(config, admin_key, inference_key, state_dir):
     if min(len(admin_key), len(inference_key)) < 32 or admin_key == inference_key:
         raise ValueError("Two different keys of at least 32 characters are required")
     manager = Manager(config, Path(state_dir))
+    auxiliary = Auxiliary(manager, config.get("auxiliary", {}))
     updates = Updates(config, Path(state_dir))
     generation = Metrics()
     lucebox_metrics = LuceboxMetrics()
@@ -200,6 +211,7 @@ def create_app(config, admin_key, inference_key, state_dir):
             except asyncio.CancelledError:
                 pass
             await updates.close()
+            await auxiliary.close()
             await manager.close()
 
     app = FastAPI(
@@ -210,6 +222,7 @@ def create_app(config, admin_key, inference_key, state_dir):
         redoc_url=None,
     )
     app.state.manager = manager
+    app.state.auxiliary = auxiliary
     app.state.maintenance = maintenance
     app.state.refresh_maintenance = refresh_maintenance
     browser_auth = BrowserAuth(state_dir, config.get("browser_auth", {}))
@@ -398,7 +411,7 @@ def create_app(config, admin_key, inference_key, state_dir):
             "phase": manager.phase,
             "native_busy": native,
             "busy": True
-            if manager.active
+            if manager.active or any(item.busy for item in auxiliary.services.values())
             else (
                 False if manager.model and manager.spec().get("probe") == "gateway_only" else native
             ),
@@ -413,7 +426,8 @@ def create_app(config, admin_key, inference_key, state_dir):
                 }
                 for key, value in manager.active.items()
             ],
-            "active_requests": len(manager.active),
+            "active_requests": len(manager.active)
+            + sum(item.busy for item in auxiliary.services.values()),
             "error": manager.last_error,
             "native_processes": [
                 {"pid": p, "start_time": s} for p, s in manager.native_processes()
@@ -599,6 +613,27 @@ def create_app(config, admin_key, inference_key, state_dir):
             await refresh_maintenance()
         return await status()
 
+    @app.get("/api/services")
+    async def auxiliary_services():
+        return auxiliary.view()
+
+    @app.post("/api/services/{name}/{operation}")
+    async def auxiliary_control(name: str, operation: str, payload: AuxiliarySelection):
+        if operation in ("enable", "load"):
+            manager.check_update()
+            enforce_lease()
+        if operation == "enable":
+            return await auxiliary.enable(name, True)
+        if operation == "disable":
+            return await auxiliary.enable(name, False)
+        if operation == "load":
+            if not payload.model:
+                raise HTTPException(400, "Choose a model")
+            return await auxiliary.load(name, payload.model)
+        if operation == "unload":
+            return await auxiliary.unload(name)
+        raise HTTPException(404, "Unknown service operation")
+
     @app.get("/v1/models")
     async def models():
         manager.refresh_liveness()
@@ -624,6 +659,19 @@ def create_app(config, admin_key, inference_key, state_dir):
                 for name, e in config["engines"].items()
                 for key, spec in e["models"].items()
                 if spec.get("enabled", True)
+            ]
+            + [
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "owned_by": "gateway",
+                    "capability": name,
+                    "status": "loaded"
+                    if item["model"] == model_id and item["loaded"]
+                    else "unloaded",
+                }
+                for name, item in auxiliary.view().items()
+                for model_id in item["models"]
             ],
         }
 
@@ -633,6 +681,120 @@ def create_app(config, admin_key, inference_key, state_dir):
     @app.get("/", include_in_schema=False)
     async def index():
         return FileResponse(static / "index.html")
+
+    @app.post("/v1/embeddings")
+    async def embeddings(request: Request):
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > 2 * 1024 * 1024:
+                raise HTTPException(413, "Embedding request exceeds 2 MiB")
+            data.extend(chunk)
+        try:
+            body = json.loads(data, parse_constant=reject_constant)
+            if not isinstance(body, dict) or set(body) - {
+                "model",
+                "input",
+                "encoding_format",
+                "user",
+            }:
+                raise ValueError()
+            model_id, inputs = body.get("model"), body.get("input")
+            encoding = body.get("encoding_format", "float")
+            if not isinstance(model_id, str) or encoding not in ("float", "base64"):
+                raise ValueError()
+            if isinstance(inputs, str):
+                inputs = [inputs]
+            if not isinstance(inputs, list) or not inputs or len(inputs) > 64:
+                raise ValueError()
+            if any(not isinstance(x, str) or not x or len(x) > 32768 for x in inputs):
+                raise ValueError()
+        except (ValueError, TypeError, RecursionError):
+            raise HTTPException(400, "Invalid embedding request") from None
+        result = await auxiliary.infer("embeddings", model_id, {"input": inputs})
+        tokens = result["tokens"]
+
+        def encode_vector(vector):
+            if encoding == "base64":
+                return base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode("ascii")
+            return vector
+
+        return {
+            "object": "list",
+            "model": model_id,
+            "data": [
+                {"object": "embedding", "index": i, "embedding": encode_vector(vector)}
+                for i, vector in enumerate(result["vectors"])
+            ],
+            "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
+        }
+
+    @app.post("/v1/audio/transcriptions")
+    async def transcriptions(request: Request):
+        from .memory_admission import MemoryAdmissionError
+
+        service = auxiliary.get("transcription")
+        if not service.enabled or service.process is None:
+            raise HTTPException(409, "Transcription service is not enabled and loaded")
+        if service.busy:
+            raise HTTPException(429, "Service is busy", headers={"Retry-After": "1"})
+        try:
+            async with auxiliary.memory.reserve(
+                2 * 1024**3 + 96 * 1024**2 + auxiliary.chat_reserve()
+            ):
+                data = bytearray()
+                async for chunk in request.stream():
+                    if len(data) + len(chunk) > 32 * 1024 * 1024:
+                        raise HTTPException(413, "Audio upload exceeds 32 MiB")
+                    data.extend(chunk)
+                request._body = bytes(data)
+                del data
+                async with request.form(
+                    max_files=1, max_fields=16, max_part_size=1024 * 1024
+                ) as form:
+                    if set(form.keys()) - {
+                        "file",
+                        "model",
+                        "language",
+                        "response_format",
+                        "timestamp_granularities[]",
+                    }:
+                        raise HTTPException(400, "Unsupported transcription parameter")
+                    upload = form.get("file")
+                    model_id = form.get("model")
+                    response_format = form.get("response_format", "json")
+                    language = form.get("language")
+                    granularities = form.getlist("timestamp_granularities[]")
+                    if not hasattr(upload, "read") or not isinstance(model_id, str):
+                        raise HTTPException(400, "File and model are required")
+                    if response_format not in ("json", "verbose_json"):
+                        raise HTTPException(400, "Unsupported response format")
+                    if language is not None and (
+                        not isinstance(language, str) or len(language) > 16
+                    ):
+                        raise HTTPException(400, "Invalid language")
+                    if any(x not in ("word", "segment") for x in granularities):
+                        raise HTTPException(400, "Unsupported timestamp granularity")
+                    with tempfile.TemporaryDirectory(
+                        prefix="audio-", dir=manager.state_dir
+                    ) as work:
+                        source, decoded = Path(work) / "source", Path(work) / "audio.wav"
+                        with source.open("wb") as out:
+                            while piece := await upload.read(65536):
+                                out.write(piece)
+                        try:
+                            await asyncio.wait_for(decode_audio(source, decoded), timeout=600)
+                        except (OSError, asyncio.TimeoutError):
+                            raise HTTPException(
+                                503, "Audio decoder unavailable or timed out"
+                            ) from None
+                        result = await auxiliary.infer(
+                            "transcription", model_id, {"path": str(decoded), "language": language}
+                        )
+                if response_format == "json":
+                    return {"text": result["text"]}
+                return {"task": "transcribe", **result}
+        except MemoryAdmissionError as exc:
+            raise HTTPException(503, str(exc)) from None
 
     @app.post("/v1/{endpoint}")
     async def infer(endpoint: str, request: Request):

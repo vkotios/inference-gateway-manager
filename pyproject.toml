@@ -15,6 +15,7 @@ Homepage = "https://github.com/vkotios/inference-gateway-manager"
 Issues = "https://github.com/vkotios/inference-gateway-manager/issues"
 [project.optional-dependencies]
 mcp = ["mcp>=1.26,<2"]
+auxiliary = ["faster-whisper>=1.1,<2", "av>=14,<17", "sentence-transformers>=5,<6", "python-multipart>=0.0.20,<1"]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.11,<1", "build>=1,<2", "mcp>=1.26,<2", "playwright>=1.49,<2"]
 [project.scripts]
 inference-gateway = "gateway.__main__:main"

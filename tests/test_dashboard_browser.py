@@ -598,3 +598,19 @@ async def test_system_prompt_is_optional_preserved_and_sent_on_load(browser_page
     await page.locator("#model").select_option("fixed")
     await expect(page.locator("#system-prompt")).to_be_disabled()
     await expect(page.locator("#system-prompt")).to_have_value("")
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_services_have_independent_controls(browser_page, live_gateway):
+    page = browser_page
+    await page.goto(live_gateway[0])
+    await login(page)
+    transcription = page.locator("#aux-transcription")
+    embeddings = page.locator("#aux-embeddings")
+    await expect(transcription.get_by_text("Disabled", exact=True)).to_be_visible()
+    await expect(embeddings.get_by_text("Disabled", exact=True)).to_be_visible()
+    await transcription.get_by_role("button", name="Enable", exact=True).click()
+    await expect(transcription.get_by_text("Enabled; no model loaded")).to_be_visible()
+    await expect(embeddings.get_by_text("Disabled", exact=True)).to_be_visible()
+    await transcription.get_by_role("button", name="Disable", exact=True).click()
+    await expect(transcription.get_by_text("Disabled", exact=True)).to_be_visible()

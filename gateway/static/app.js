@@ -59,7 +59,7 @@ function disconnect(message = "Signed out. Existing inference continues.") {
   $("file-path").textContent = ""; $("file-status").textContent = ""; $("file-root").replaceChildren(); listing = null; browserTarget = null;
   for (const id of ["password", "key"]) { $(id).type = "password"; $("show-" + id).textContent = "Show"; $("show-" + id).setAttribute("aria-label", id === "key" ? "Show control key" : "Show password"); }
   $("sessions-panel").hidden = true; $("force").checked = false;
-  capabilities(); buttons(); notice(message);
+  showAuxServices(null); capabilities(); buttons(); notice(message);
 }
 function buttons() {
   if (typeof updateButtons === "function") updateButtons();
@@ -139,6 +139,47 @@ function chart(id, values, value) {
   const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
   line.setAttribute("points", values.map((v,i) => (i*300/59) + "," + (58-v*.54)).join(" ")); $(id).replaceChildren(line);
 }
+let auxBusy = false;
+function showAuxServices(services) {
+  const root = $("aux-services");
+  for (const name of ["transcription", "embeddings"]) {
+    let row = $("aux-" + name);
+    if (!row) {
+      row = document.createElement("div"); row.id = "aux-" + name; row.className = "controls";
+      const title = document.createElement("strong"); title.textContent = name === "transcription" ? "Transcription" : "Embeddings";
+      const select = document.createElement("select"); select.setAttribute("aria-label", title.textContent + " model");
+      const status = document.createElement("span");
+      row.append(title, select, status);
+      for (const op of ["enable", "load", "unload", "disable"]) {
+        const button = document.createElement("button"); button.type = "button"; button.textContent = op[0].toUpperCase() + op.slice(1); button.dataset.op = op;
+        button.onclick = async () => {
+          if (auxBusy) return;
+          auxBusy = true; showAuxServices(services);
+          try { await api(`/api/services/${name}/${op}`, op === "load" ? {model: select.value} : {}); notice(title.textContent + " updated."); }
+          catch (error) { notice(error.message); }
+          finally { auxBusy = false; await poll(); }
+        };
+        row.append(button);
+      }
+      root.append(row);
+    }
+    const item = services?.[name], select = row.querySelector("select"), status = row.querySelector("span");
+    const selected = select.value; select.replaceChildren(); option(select, "", "Choose model");
+    for (const model of item?.models || []) option(select, model, model);
+    if ([...select.options].some(x => x.value === selected)) select.value = selected;
+    else if (item?.model) select.value = item.model;
+    status.textContent = !authenticated ? "Disconnected" : item?.busy ? "Processing" : item?.loaded ? `${item.enabled ? "Enabled" : "Disabled"} · Loaded: ${item.model}` : item?.enabled ? "Enabled; no model loaded" : "Disabled";
+    select.disabled = !authenticated || auxBusy || !!item?.loaded;
+    for (const button of row.querySelectorAll("button")) {
+      const op = button.dataset.op;
+      button.disabled = !authenticated || auxBusy || !item || !!item.busy ||
+        (op === "enable" && item.enabled) || (op === "disable" && !item.enabled) ||
+        (op === "load" && (!item.enabled || item.loaded || !select.value)) ||
+        (op === "unload" && !item.loaded);
+    }
+    select.onchange = () => showAuxServices(services);
+  }
+}
 function describeGeneration(g) {
   const live = g?.live, last = g?.last, num = (v, d = 1) => Number(v).toLocaleString(undefined, {maximumFractionDigits: d});
   if (live) {
@@ -181,7 +222,7 @@ async function poll() {
   if (!authenticated || polling) return;
   const epoch = generation; polling = true;
   try {
-    const [s,t,r] = await Promise.all([api("/api/status"), api("/api/telemetry"), api("/api/recovery")]);
+    const [s,t,r,aux] = await Promise.all([api("/api/status"), api("/api/telemetry"), api("/api/recovery"), api("/api/services")]);
     if (epoch !== generation) return;
     state = s; recovery = r; $("connection").textContent = "CONNECTED"; $("phase").textContent = s.phase.toUpperCase();
     $("loaded").textContent = s.loaded_model ? `${s.selected_engine} / ${s.loaded_model}` : "No model loaded";
@@ -203,7 +244,7 @@ async function poll() {
     chart("gpu-chart", history.gpu, gpu?.utilization_percent);
     $("cpu").textContent = t.cpu_percent == null ? "Unknown" : t.cpu_percent.toFixed(0) + "%";
     $("swap").textContent = "Swap used: " + gib(t.swap_used_bytes); $("updated").textContent = "UPDATED " + new Date().toLocaleTimeString();
-    showMaintenance(s.maintenance);
+    showMaintenance(s.maintenance); showAuxServices(aux);
     if (s.error) notice(s.error);
     buttons();
   } catch (error) {
