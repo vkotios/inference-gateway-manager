@@ -59,7 +59,7 @@ function disconnect(message = "Signed out. Existing inference continues.") {
   $("file-path").textContent = ""; $("file-status").textContent = ""; $("file-root").replaceChildren(); listing = null; browserTarget = null;
   for (const id of ["password", "key"]) { $(id).type = "password"; $("show-" + id).textContent = "Show"; $("show-" + id).setAttribute("aria-label", id === "key" ? "Show control key" : "Show password"); }
   $("sessions-panel").hidden = true; $("force").checked = false;
-  showAuxServices(null); capabilities(); buttons(); notice(message);
+  showAuxServices(null); showFootprints(null); capabilities(); buttons(); notice(message);
 }
 function buttons() {
   if (typeof updateButtons === "function") updateButtons();
@@ -83,6 +83,8 @@ function buttons() {
   $("context").disabled = !authenticated || working || cancelPending || !model?.context_limits?.adjustable;
   $("reasoning").disabled = !authenticated || working || cancelPending || (model?.reasoning_modes || ["auto"]).length < 2;
   $("system-prompt").disabled = !authenticated || working || cancelPending || !model || model.system_prompt_supported === false;
+  $("calibrate-model").disabled = !authenticated || working || cancelPending || !$("engine").value || !$("model").value;
+  updateModelFootprint();
   $("inspect-model").disabled = !authenticated || inspecting || saving || !registrationProfile() || !$("register-path").value;
   $("add-model").disabled = !authenticated || !candidate || saving;
   $("browse-model").disabled = !authenticated || saving || !registrationProfile();
@@ -139,46 +141,161 @@ function chart(id, values, value) {
   const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
   line.setAttribute("points", values.map((v,i) => (i*300/59) + "," + (58-v*.54)).join(" ")); $(id).replaceChildren(line);
 }
-let auxBusy = false;
+let auxBusy = false, auxSettingsBusy = false, footprintBusy = false, auxState = null, footprintData = null, footprintKey = "";
+const fmtGiB = n => n == null ? "unknown" : (n / 2 ** 30).toFixed(1) + " GiB";
+const RESTORE_HELP = {
+  never: "Nothing comes back by itself. Load the services again after a restart or after a large model.",
+  after_clean_shutdown: "After a normal gateway restart the services you had loaded come back. After a large chat model leaves they return once the delay has passed and they fit. Not after a crash.",
+  on_demand: "A service you had loaded starts when a client first asks for it, if it fits."
+};
+const auxParts = {};
+function auxControl(name) {
+  const title = name === "transcription" ? "Transcription" : "Embeddings";
+  const row = document.createElement("div"); row.id = "aux-" + name; row.className = "auxrow";
+  const controls = document.createElement("div"); controls.className = "controls";
+  const label = document.createElement("label"); label.append(title);
+  const select = document.createElement("select"); select.setAttribute("aria-label", title + " model"); label.append(select);
+  const main = document.createElement("button"); main.type = "button";
+  controls.append(label, main);
+  const status = document.createElement("div"); status.className = "auxstatus";
+  const text = document.createElement("span");
+  const chip = document.createElement("span"); chip.className = "chip";
+  const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "secondary";
+  status.append(text, chip, toggle);
+  row.append(controls, status);
+  const run = async (op, body) => {
+    if (auxBusy) return;
+    auxBusy = true; showAuxServices(auxState);
+    try { await api(`/api/services/${name}/${op}`, body); notice(title + " updated."); }
+    catch (error) { notice(error.message); }
+    finally { auxBusy = false; await poll(); }
+  };
+  main.onclick = () => { const item = auxState?.[name]; if (item?.loaded) run("unload", {}); else run("load", {model: select.value}); };
+  toggle.onclick = () => run(auxState?.[name]?.enabled ? "disable" : "enable", {});
+  select.onchange = () => showAuxServices(auxState);
+  return {row, title, select, main, text, chip, toggle};
+}
 function showAuxServices(services) {
+  auxState = services;
   const root = $("aux-services");
+  let loaded = 0, enabled = 0;
   for (const name of ["transcription", "embeddings"]) {
-    let row = $("aux-" + name);
-    if (!row) {
-      row = document.createElement("div"); row.id = "aux-" + name; row.className = "controls";
-      const title = document.createElement("strong"); title.textContent = name === "transcription" ? "Transcription" : "Embeddings";
-      const select = document.createElement("select"); select.setAttribute("aria-label", title.textContent + " model");
-      const status = document.createElement("span");
-      row.append(title, select, status);
-      for (const op of ["enable", "load", "unload", "disable"]) {
-        const button = document.createElement("button"); button.type = "button"; button.textContent = op[0].toUpperCase() + op.slice(1); button.dataset.op = op;
-        button.onclick = async () => {
-          if (auxBusy) return;
-          auxBusy = true; showAuxServices(services);
-          try { await api(`/api/services/${name}/${op}`, op === "load" ? {model: select.value} : {}); notice(title.textContent + " updated."); }
-          catch (error) { notice(error.message); }
-          finally { auxBusy = false; await poll(); }
-        };
-        row.append(button);
-      }
-      root.append(row);
-    }
-    const item = services?.[name], select = row.querySelector("select"), status = row.querySelector("span");
+    let part = auxParts[name];
+    if (!part) { part = auxParts[name] = auxControl(name); root.append(part.row); }
+    const item = services?.[name], select = part.select;
     const selected = select.value; select.replaceChildren(); option(select, "", "Choose model");
     for (const model of item?.models || []) option(select, model, model);
     if ([...select.options].some(x => x.value === selected)) select.value = selected;
     else if (item?.model) select.value = item.model;
-    status.textContent = !authenticated ? "Disconnected" : item?.busy ? "Processing" : item?.loaded ? `${item.enabled ? "Enabled" : "Disabled"} · Loaded: ${item.model}` : item?.enabled ? "Enabled; no model loaded" : "Disabled";
-    select.disabled = !authenticated || auxBusy || !!item?.loaded;
-    for (const button of row.querySelectorAll("button")) {
-      const op = button.dataset.op;
-      button.disabled = !authenticated || auxBusy || !item || !!item.busy ||
-        (op === "enable" && item.enabled) || (op === "disable" && !item.enabled) ||
-        (op === "load" && (!item.enabled || item.loaded || !select.value)) ||
-        (op === "unload" && !item.loaded);
+    else if (item?.desired_model) select.value = item.desired_model;
+    let text = !authenticated ? "Disconnected" : item?.busy ? "Processing" : item?.loaded ? `${item.enabled ? "Enabled" : "Disabled"} · Loaded: ${item.model}` : item?.enabled ? "Enabled; no model loaded" : "Disabled";
+    if (authenticated && item) {
+      if (item.suspended_reason) {
+        const auto = item.restore?.policy && item.restore.policy !== "never" && item.resume_in_seconds != null;
+        text += ` · Unloaded for the chat model (${item.suspended_reason.replaceAll("_", " ")})` +
+          (auto ? `; automatic restore in about ${Math.max(1, Math.ceil(item.resume_in_seconds / 60))} min` : "; load it again to restore");
+      }
+      if (item.restore?.blocked) text += ` · Automatic restore off: ${item.restore.blocked}`;
+      if (item.last_error && !item.loaded) text += ` · Last restore attempt: ${item.last_error}`;
     }
-    select.onchange = () => showAuxServices(services);
+    part.text.textContent = text;
+    const fp = item?.footprints?.[select.value];
+    part.chip.textContent = authenticated && fp ? `${fmtGiB(fp.needs_bytes)} ${fp.calibrated ? "measured" : "estimated"}` : "";
+    part.main.textContent = item?.loaded ? "Unload" : "Load";
+    part.main.disabled = !authenticated || auxBusy || !item || !!item.busy || (!item.loaded && (!item.enabled || !select.value));
+    part.main.title = item && !item.loaded && !item.enabled ? "Enable the service first" : "";
+    part.toggle.textContent = item?.enabled ? "Disable" : "Enable";
+    part.toggle.disabled = !authenticated || auxBusy || !item || !!item.busy;
+    select.disabled = !authenticated || auxBusy || !!item?.loaded;
+    if (item?.loaded) loaded++;
+    if (item?.enabled) enabled++;
   }
+  $("aux-badge").textContent = !authenticated ? "DISCONNECTED" : loaded ? loaded + " LOADED" : enabled ? "NONE LOADED" : "DISABLED";
+  const restore = (services?.transcription || services?.embeddings)?.restore;
+  const policy = $("aux-restore"), delay = $("aux-holdoff");
+  if (restore && !auxSettingsBusy) {
+    if (document.activeElement !== policy) policy.value = restore.policy;
+    if (![...delay.options].some(o => Number(o.value) === restore.holdoff_seconds)) option(delay, String(restore.holdoff_seconds), Math.round(restore.holdoff_seconds / 60) + " minutes");
+    if (document.activeElement !== delay) delay.value = String(restore.holdoff_seconds);
+  }
+  policy.disabled = delay.disabled = !authenticated || auxSettingsBusy || !restore;
+  $("aux-restore-help").textContent = authenticated && restore
+    ? RESTORE_HELP[restore.policy] + (restore.blocked ? ` Automatic restore is paused: ${restore.blocked}. Loading a service yourself clears this.` : "")
+    : "Sign in to change restore settings.";
+}
+async function saveAuxSettings(body) {
+  if (!authenticated || auxSettingsBusy) return;
+  auxSettingsBusy = true; showAuxServices(auxState);
+  try { await api("/api/services/settings", body); notice("Restore settings saved."); }
+  catch (error) { notice(error.message); }
+  finally { auxSettingsBusy = false; await poll(); }
+}
+$("aux-restore").onchange = () => saveAuxSettings({restore: $("aux-restore").value});
+$("aux-holdoff").onchange = () => saveAuxSettings({restore_holdoff_seconds: Number($("aux-holdoff").value)});
+async function calibrate(engine, model) {
+  if (!authenticated || working || cancelPending || !engine || !model) return;
+  if (!await askConfirmation("Calibrate " + engine + "/" + model + "?", "The model is reloaded at its maximum context and the current chat model and auxiliary services are unloaded. Loading can take several minutes and may use nearly all memory; the engine is stopped automatically if available memory collapses.", "Calibrate")) return;
+  const epoch = generation; working = true; buttons(); notice("Calibration in progress. This can take several minutes.");
+  try { await api("/api/footprints/calibrate", {engine, model}); if (epoch === generation) notice("Footprint recorded for " + engine + "/" + model + "."); }
+  catch (error) { if (epoch === generation) notice(error.message); }
+  finally { if (epoch === generation) { working = false; await poll(); buttons(); } }
+}
+$("calibrate-model").onclick = () => calibrate($("engine").value, $("model").value);
+function updateModelFootprint() {
+  const chip = $("model-footprint");
+  const engine = $("engine").value, model = $("model").value;
+  const entry = footprintData?.compatibility?.find(c => c.engine === engine && c.model === model);
+  let text, warn = false;
+  if (!authenticated || !footprintData) text = "Memory footprint appears after sign-in.";
+  else if (!model) text = "Select a model to see its memory footprint.";
+  else if (!entry) text = "No footprint information for this model.";
+  else if (!entry.calibrated) { text = "Not calibrated: loading it unloads the auxiliary services until its memory is recorded."; warn = true; }
+  else text = `${fmtGiB(entry.needs_bytes)} ${entry.source}` + (entry.fits_with_loaded_services == null ? "" : entry.fits_with_loaded_services ? " · fits with the loaded services" : " · the loaded services would unload");
+  chip.textContent = text; chip.className = warn ? "small chipline warn" : "small chipline";
+}
+function showFootprints(data) {
+  footprintData = data; updateModelFootprint();
+  const controls = $("footprint-controls"), list = $("footprint-list");
+  if (!data) { footprintKey = ""; controls.replaceChildren(); list.replaceChildren(); return; }
+  const rows = [...(data.compatibility || [])].sort((a, b) => Number(a.calibrated) - Number(b.calibrated) || (a.engine + a.model).localeCompare(b.engine + b.model));
+  const missing = rows.filter(r => !r.calibrated).length, m = data.memory || {};
+  const summaryText = `${rows.length - missing} calibrated · ${missing} not calibrated · ${fmtGiB(m.available_bytes)} available of ${fmtGiB(m.total_bytes)}` +
+    (data.loaded ? ` · recording ${data.loaded.key}: ${fmtGiB(data.loaded.peak_bytes)} so far${data.loaded.settled ? "" : " (settling)"}` : "") + (data.error ? " · " + data.error : "");
+  const key = JSON.stringify([rows.map(r => [r.engine, r.model, r.context, r.calibrated, r.source, r.needs_bytes && Math.round(r.needs_bytes / 1048576), r.fits_with_loaded_services]), working, cancelPending, footprintBusy, authenticated, Boolean(data.loaded?.samples)]);
+  if (key === footprintKey) { const summary = $("footprint-summary"); if (summary) summary.textContent = summaryText; return; }
+  footprintKey = key;
+  const head = document.createElement("div"); head.className = "fphead";
+  const summary = document.createElement("span"); summary.id = "footprint-summary"; summary.className = "small"; summary.textContent = summaryText;
+  const record = document.createElement("button"); record.type = "button"; record.id = "footprint-record"; record.className = "secondary"; record.textContent = "Record now";
+  record.disabled = !authenticated || footprintBusy || !data.loaded?.samples;
+  record.title = "Save the loaded chat model's current memory use as its footprint";
+  record.onclick = async () => {
+    if (footprintBusy) return;
+    footprintBusy = true; record.disabled = true;
+    try { await api("/api/footprints/record", {}); notice("Footprint recorded."); }
+    catch (error) { notice(error.message); }
+    finally { footprintBusy = false; await poll(); }
+  };
+  head.append(summary, record); controls.replaceChildren(head);
+  const table = document.createElement("table"); table.className = "fptable"; table.setAttribute("aria-label", "Chat model footprints");
+  const thead = document.createElement("thead"), hr = document.createElement("tr");
+  for (const title of ["MODEL", "CONTEXT", "FOOTPRINT", "WITH SERVICES", ""]) { const th = document.createElement("th"); th.textContent = title; hr.append(th); }
+  thead.append(hr);
+  const body = document.createElement("tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    const cell = text => { const td = document.createElement("td"); td.textContent = text; tr.append(td); return td; };
+    cell(r.engine + "/" + r.model); cell(r.context ?? "n/a");
+    const fp = cell(r.calibrated ? `${fmtGiB(r.needs_bytes)} ${r.source}` : "not calibrated"); fp.className = r.calibrated ? "chip" : "warn";
+    cell(!r.calibrated ? "services unload" : r.fits_with_loaded_services == null ? "n/a" : r.fits_with_loaded_services ? "fits" : "services unload");
+    const act = document.createElement("td"); act.className = "act";
+    const button = document.createElement("button"); button.type = "button"; button.className = "secondary"; button.textContent = "Calibrate";
+    button.setAttribute("aria-label", "Calibrate " + r.engine + "/" + r.model);
+    button.disabled = !authenticated || working || cancelPending;
+    button.onclick = () => calibrate(r.engine, r.model);
+    act.append(button); tr.append(act); body.append(tr);
+  }
+  table.append(thead, body); list.replaceChildren(table);
 }
 function describeGeneration(g) {
   const live = g?.live, last = g?.last, num = (v, d = 1) => Number(v).toLocaleString(undefined, {maximumFractionDigits: d});
@@ -224,6 +341,7 @@ async function poll() {
   try {
     const [s,t,r,aux] = await Promise.all([api("/api/status"), api("/api/telemetry"), api("/api/recovery"), api("/api/services")]);
     if (epoch !== generation) return;
+    try { showFootprints(await api("/api/footprints")); } catch { /* shown on the next poll */ }
     state = s; recovery = r; $("connection").textContent = "CONNECTED"; $("phase").textContent = s.phase.toUpperCase();
     $("loaded").textContent = s.loaded_model ? `${s.selected_engine} / ${s.loaded_model}` : "No model loaded";
     const active = s.active_settings;

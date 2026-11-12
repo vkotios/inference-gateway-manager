@@ -29,6 +29,7 @@ async def test_services_control_auth_inference_and_memory_gate(tmp_path, monkeyp
     app = create_app(config, "a" * 32, "b" * 32, tmp_path)
     aux = app.state.auxiliary
     aux.memory._sample = lambda: 128 * 1024**3
+    aux.sample_total = lambda: 128 * 1024**3
     native = asyncio.create_subprocess_exec
     fixture = str(Path(__file__).with_name("fixture_aux_worker.py"))
 
@@ -78,13 +79,15 @@ async def test_services_control_auth_inference_and_memory_gate(tmp_path, monkeyp
         assert struct.unpack(
             "<2f", base64.b64decode(encoded.json()["data"][0]["embedding"])
         ) == pytest.approx((0.1, 0.2))
-        with pytest.raises(HTTPException) as blocked:
+        # Loaded services no longer block chat lifecycle: with no engine selected the chat
+        # path fails for its own reason, not because an auxiliary service is loaded.
+        with pytest.raises(HTTPException) as chat_error:
             await app.state.manager._load_model("other")
-        assert blocked.value.status_code == 409
+        assert chat_error.value.detail == "Select an engine before a model"
+        # A request while a chat model is loaded is admitted by live memory alone; the old
+        # unconfigured "chat growth budget" refusal is gone.
         app.state.manager.phase = "ready"
-        with pytest.raises(HTTPException) as unknown_chat_budget:
-            await aux.infer("embeddings", "mini", {"input": ["hello"]})
-        assert unknown_chat_budget.value.status_code == 409
+        assert (await aux.infer("embeddings", "mini", {"input": ["hello"]}))["vectors"]
         app.state.manager.phase = "unloaded"
         pending = asyncio.create_task(aux.infer("embeddings", "mini", {"input": ["wait"]}))
         while not aux.services["embeddings"].busy:

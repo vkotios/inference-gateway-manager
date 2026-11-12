@@ -22,6 +22,14 @@ class MemoryDecision:
     minimum_free_bytes: int
 
 
+class _Reservation:
+    __slots__ = ("bytes", "released")
+
+    def __init__(self, size):
+        self.bytes = size
+        self.released = False
+
+
 class MemoryAdmission:
     """Serialize reservations against a caller-provided effective memory sample.
 
@@ -42,8 +50,13 @@ class MemoryAdmission:
     def reserved_bytes(self):
         return self._reserved
 
-    @asynccontextmanager
-    async def reserve(self, requested_bytes: int):
+    async def acquire(self, requested_bytes: int):
+        """Reserve memory until ``release``; returns ``(decision, token)``.
+
+        Unlike ``reserve`` the reservation is not tied to a ``with`` block, so it can
+        outlive a lock that was needed only for the admission decision. Callers must
+        release in a ``finally`` clause.
+        """
         if type(requested_bytes) is not int or requested_bytes <= 0:
             raise ValueError("requested_bytes must be a positive integer")
         async with self._lock:
@@ -59,12 +72,23 @@ class MemoryAdmission:
             if available - self._reserved - requested_bytes < self.minimum_free_bytes:
                 raise MemoryAdmissionError("Insufficient memory headroom")
             self._reserved += requested_bytes
+            return decision, _Reservation(requested_bytes)
+
+    def release(self, token):
+        """Idempotent; mutations run atomically on the event-loop thread."""
+        if not token.released:
+            token.released = True
+            self._reserved -= token.bytes
+
+    @asynccontextmanager
+    async def reserve(self, requested_bytes: int):
+        decision, token = await self.acquire(requested_bytes)
         try:
             yield decision
         finally:
             # No await is needed: mutations execute atomically on the event-loop
             # thread, including when the operation is cancelled.
-            self._reserved -= requested_bytes
+            self.release(token)
 
 
 def effective_available_memory(
@@ -84,6 +108,19 @@ def effective_available_memory(
     if len(candidates) != 1 or len(candidates[0]) != 3 or candidates[0][2] != "kB":
         raise ValueError("MemAvailable unavailable")
     available = int(candidates[0][1]) * 1024
+    for limit, usage in _cgroup_limits(cgroup_path, cgroup_mount):
+        if limit is not None:
+            available = min(available, max(0, limit - usage))
+    return available
+
+
+def _cgroup_limits(cgroup_path, cgroup_mount):
+    """``(limit | None, usage)`` for the process's cgroup and every ancestor.
+
+    Raises rather than guessing when the hierarchy cannot be read completely.
+    """
+    from pathlib import Path
+
     entries = [line.split(":", 2) for line in Path(cgroup_path).read_text().splitlines()]
     unified = [fields[2] for fields in entries if len(fields) == 3 and fields[:2] == ["0", ""]]
     if len(unified) != 1 or not unified[0].startswith("/"):
@@ -99,6 +136,7 @@ def effective_available_memory(
     for part in parts:
         current = current / part
         paths.append(current)
+    result = []
     for current in paths:
         # The host hierarchy root may not expose memory.max/current. A
         # namespaced cgroup root can expose both and may itself be limited.
@@ -111,9 +149,27 @@ def effective_available_memory(
         usage = int(usage_text)
         if usage < 0:
             raise ValueError("Invalid cgroup usage")
+        limit = None
         if limit_text != "max":
             limit = int(limit_text)
             if limit < 0:
                 raise ValueError("Invalid cgroup limit")
-            available = min(available, max(0, limit - usage))
-    return available
+        result.append((limit, usage))
+    return result
+
+
+def effective_total_memory(
+    *, meminfo_path="/proc/meminfo", cgroup_path="/proc/self/cgroup", cgroup_mount="/sys/fs/cgroup"
+):
+    """Physical memory capped by the tightest visible cgroup limit (swap excluded)."""
+    from pathlib import Path
+
+    lines = Path(meminfo_path).read_text().splitlines()
+    candidates = [line.split() for line in lines if line.startswith("MemTotal:")]
+    if len(candidates) != 1 or len(candidates[0]) != 3 or candidates[0][2] != "kB":
+        raise ValueError("MemTotal unavailable")
+    total = int(candidates[0][1]) * 1024
+    for limit, _usage in _cgroup_limits(cgroup_path, cgroup_mount):
+        if limit is not None:
+            total = min(total, limit)
+    return total

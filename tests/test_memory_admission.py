@@ -46,6 +46,40 @@ async def test_unknown_memory_fails_closed(sample):
     assert admission.reserved_bytes == 0
 
 
+@pytest.mark.asyncio
+async def test_acquire_release_outlives_a_block_and_release_is_idempotent():
+    admission = MemoryAdmission(lambda: 100, 30)
+    decision, token = await admission.acquire(40)
+    assert decision.requested_bytes == 40 and admission.reserved_bytes == 40
+    with pytest.raises(MemoryAdmissionError, match="headroom"):
+        await admission.acquire(40)
+    admission.release(token)
+    admission.release(token)  # second release must not go negative
+    assert admission.reserved_bytes == 0
+    await admission.acquire(40)
+
+
+def test_effective_total_memory_is_capped_by_cgroup_limit(tmp_path):
+    from gateway.memory_admission import effective_total_memory
+
+    root = tmp_path / "cgroup"
+    (root / "a").mkdir(parents=True)
+    (root / "cgroup.controllers").write_text("memory")
+    (root / "a" / "memory.max").write_text("50000")
+    (root / "a" / "memory.current").write_text("1")
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal: 100 kB\nMemAvailable: 90 kB\n")
+    membership = tmp_path / "membership"
+    membership.write_text("0::/a\n")
+    kwargs = dict(meminfo_path=meminfo, cgroup_path=membership, cgroup_mount=root)
+    assert effective_total_memory(**kwargs) == 50000  # limit below physical memory
+    (root / "a" / "memory.max").write_text("max")
+    assert effective_total_memory(**kwargs) == 100 * 1024
+    meminfo.write_text("MemAvailable: 90 kB\n")
+    with pytest.raises(ValueError):
+        effective_total_memory(**kwargs)
+
+
 def test_effective_memory_respects_cgroup_ancestors(tmp_path):
     from gateway.memory_admission import effective_available_memory
 

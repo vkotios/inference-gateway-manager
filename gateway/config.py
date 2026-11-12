@@ -27,14 +27,78 @@ def validate(config):
     if not isinstance(auxiliary, dict) or set(auxiliary) - {
         "minimum_free_bytes",
         "chat_growth_bytes",
+        "host_baseline_bytes",
+        "restore",
+        "restore_holdoff_seconds",
+        "drain_seconds",
         "worker_python",
         "transcription",
         "embeddings",
     }:
         raise ValueError("Invalid auxiliary service configuration")
-    for key in ("minimum_free_bytes", "chat_growth_bytes"):
+    for key in ("minimum_free_bytes", "host_baseline_bytes"):
         if key in auxiliary and (type(auxiliary[key]) is not int or auxiliary[key] <= 0):
             raise ValueError(f"{key} must be a positive integer")
+    if "chat_growth_bytes" in auxiliary and (
+        type(auxiliary["chat_growth_bytes"]) is not int or auxiliary["chat_growth_bytes"] < 0
+    ):
+        raise ValueError("chat_growth_bytes must be a non-negative integer")
+    if auxiliary.get("restore", "never") not in ("never", "after_clean_shutdown", "on_demand"):
+        raise ValueError("restore must be never, after_clean_shutdown or on_demand")
+    if "restore_holdoff_seconds" in auxiliary and (
+        type(auxiliary["restore_holdoff_seconds"]) is not int
+        or auxiliary["restore_holdoff_seconds"] < 0
+    ):
+        raise ValueError("restore_holdoff_seconds must be a non-negative integer")
+    drain = auxiliary.get("drain_seconds", {})
+    if type(drain) is int:
+        drain = {"embeddings": drain, "transcription": drain}
+    if (
+        not isinstance(drain, dict)
+        or set(drain) - {"embeddings", "transcription"}
+        or any(type(v) is not int or v < 0 for v in drain.values())
+    ):
+        raise ValueError("drain_seconds must be a non-negative integer or a per-service object")
+    footprints = config.get("footprints", {})
+    if not isinstance(footprints, dict) or set(footprints) - {
+        "interval_seconds",
+        "settle_seconds",
+        "abort_below_available_bytes",
+    }:
+        raise ValueError("Invalid footprints configuration")
+    for key in ("interval_seconds", "settle_seconds"):
+        if key in footprints and (
+            type(footprints[key]) not in (int, float)
+            or footprints[key] < 0
+            or (key == "interval_seconds" and footprints[key] <= 0)
+        ):
+            raise ValueError(f"footprints.{key} must be a non-negative number")
+    if "abort_below_available_bytes" in footprints and (
+        type(footprints["abort_below_available_bytes"]) is not int
+        or footprints["abort_below_available_bytes"] <= 0
+    ):
+        raise ValueError("footprints.abort_below_available_bytes must be a positive integer")
+    seeds = config.get("memory_footprints", [])
+    if not isinstance(seeds, list):
+        raise ValueError("memory_footprints must be a list")
+    for item in seeds:
+        if (
+            not isinstance(item, dict)
+            or set(item)
+            - {"kind", "key", "steady_bytes", "peak_bytes", "request_bytes", "context", "note"}
+            or item.get("kind") not in ("chat", "transcription", "embeddings")
+            or not isinstance(item.get("key"), str)
+            or not item["key"]
+            or type(item.get("steady_bytes")) is not int
+            or item["steady_bytes"] <= 0
+            or any(
+                key in item and (type(item[key]) is not int or item[key] < 0)
+                for key in ("peak_bytes", "request_bytes")
+            )
+            or ("context" in item and (type(item["context"]) is not int or item["context"] <= 0))
+            or ("note" in item and (not isinstance(item["note"], str) or len(item["note"]) > 200))
+        ):
+            raise ValueError("Invalid memory_footprints entry")
     if "worker_python" in auxiliary and (
         not isinstance(auxiliary["worker_python"], str)
         or not Path(auxiliary["worker_python"]).is_absolute()
@@ -58,8 +122,9 @@ def validate(config):
                 raise ValueError("Invalid auxiliary model fields")
             if not isinstance(spec.get("path"), str) or not Path(spec["path"]).is_absolute():
                 raise ValueError("Auxiliary model path must be absolute")
+            # Budgets are optional seeds for the first load; measured footprints replace them.
             for key in ("load_bytes", "request_bytes"):
-                if type(spec.get(key)) is not int or spec[key] <= 0:
+                if key in spec and (type(spec[key]) is not int or spec[key] <= 0):
                     raise ValueError("Auxiliary model budgets must be positive integers")
             if type(spec.get("threads", 4)) is not int or not 1 <= spec.get("threads", 4) <= 64:
                 raise ValueError("Auxiliary threads must be between 1 and 64")

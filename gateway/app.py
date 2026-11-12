@@ -13,6 +13,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -25,9 +26,12 @@ from . import __version__
 from .aux_audio import decode_audio
 from .auxiliary import Auxiliary
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
-from .core import Manager, finish_cleanup
+from .core import Manager, finish_cleanup, identity
+from .footprint_recorder import FootprintTracker
+from .footprints import FootprintStore, chat_fingerprint, seeds_from_config
 from .lucebox_metrics import LuceboxMetrics
 from .maintenance import Maintenance
+from .memory_admission import effective_available_memory
 from .metrics import Metrics, Tap
 from .registry import Registry
 from .settings import apply_reasoning, apply_system_prompt, summary
@@ -97,6 +101,24 @@ class AuxiliarySelection(BaseModel):
     model: str | None = None
 
 
+class AuxiliarySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    restore: Literal["never", "after_clean_shutdown", "on_demand"] | None = None
+    restore_holdoff_seconds: StrictInt | None = Field(default=None, ge=0, le=7 * 24 * 3600)
+
+
+class FootprintForget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: StrictStr
+    key: StrictStr
+
+
+class FootprintCalibrate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    engine: StrictStr
+    model: StrictStr
+
+
 class InferenceLifetime:
     """Track the outer ASGI task, including socket drain after generator yield."""
 
@@ -124,7 +146,16 @@ def create_app(config, admin_key, inference_key, state_dir):
     if min(len(admin_key), len(inference_key)) < 32 or admin_key == inference_key:
         raise ValueError("Two different keys of at least 32 characters are required")
     manager = Manager(config, Path(state_dir))
-    auxiliary = Auxiliary(manager, config.get("auxiliary", {}))
+    footprint_options = config.get("footprints", {})
+    store = FootprintStore(manager.state_dir / "footprints.json", seeds=seeds_from_config(config))
+    auxiliary = Auxiliary(manager, config.get("auxiliary", {}), store)
+    manager.tracker = FootprintTracker(
+        store,
+        pids=lambda: [p[0] for p in tuple(manager.owned) if identity(p[0]) == p],
+        aux_resident=auxiliary.resident_bytes,
+        interval=footprint_options.get("interval_seconds", 5.0),
+        settle_seconds=footprint_options.get("settle_seconds", 30.0),
+    )
     updates = Updates(config, Path(state_dir))
     generation = Metrics()
     lucebox_metrics = LuceboxMetrics()
@@ -194,6 +225,7 @@ def create_app(config, admin_key, inference_key, state_dir):
                         manager.lease_guard = lease_guard
 
         startup = asyncio.create_task(initialise())
+        auxiliary.start()
         supervisor = asyncio.create_task(watchdog())
         publisher = asyncio.create_task(maintenance_loop()) if maintenance else None
         try:
@@ -617,6 +649,14 @@ def create_app(config, admin_key, inference_key, state_dir):
     async def auxiliary_services():
         return auxiliary.view()
 
+    @app.get("/api/services/settings")
+    async def auxiliary_settings():
+        return auxiliary.settings_view()
+
+    @app.post("/api/services/settings")
+    async def auxiliary_settings_update(payload: AuxiliarySettings):
+        return await auxiliary.set_settings(payload.restore, payload.restore_holdoff_seconds)
+
     @app.post("/api/services/{name}/{operation}")
     async def auxiliary_control(name: str, operation: str, payload: AuxiliarySelection):
         if operation in ("enable", "load"):
@@ -633,6 +673,144 @@ def create_app(config, admin_key, inference_key, state_dir):
         if operation == "unload":
             return await auxiliary.unload(name)
         raise HTTPException(404, "Unknown service operation")
+
+    def footprint_view():
+        live = auxiliary.live_services()
+        loaded_entries = [auxiliary.aux_entry(s) for s in live]
+        fingerprints, compatibility = {}, []
+        for engine_id, engine_cfg in config["engines"].items():
+            for model_id, model_cfg in engine_cfg.get("models", {}).items():
+                if not model_cfg.get("enabled", True):
+                    continue
+                limits = model_cfg.get("context_limits", {})
+                try:
+                    _engine, spec, settings = manager.prepare_model(
+                        model_id, engine_id, limits.get("max") or model_cfg.get("context")
+                    )
+                except (HTTPException, ValueError, KeyError, TypeError):
+                    continue
+                key = f"{engine_id}/{model_id}"
+                fingerprint = chat_fingerprint(engine_id, model_id, spec)
+                fingerprints[("chat", key)] = fingerprint
+                record = store.lookup("chat", key, fingerprint, settings.get("context"))
+                decision = (
+                    auxiliary.fit_decision([("chat", key, record)], loaded_entries)
+                    if live
+                    else None
+                )
+                compatibility.append(
+                    {
+                        "engine": engine_id,
+                        "model": model_id,
+                        "context": settings.get("context"),
+                        "calibrated": record is not None,
+                        "source": record.source if record else None,
+                        "needs_bytes": record.needs_bytes if record else None,
+                        "fits_with_loaded_services": decision.fits if decision else None,
+                    }
+                )
+        for name, service in auxiliary.services.items():
+            for model_id in service.models:
+                fingerprints[(name, model_id)] = auxiliary.aux_fp(name, model_id)
+        try:
+            available = effective_available_memory()
+        except (OSError, ValueError):
+            available = None
+        return {
+            "records": store.listing(fingerprints),
+            "loaded": manager.tracker.snapshot() if manager.tracker else None,
+            "compatibility": compatibility,
+            "memory": {
+                "total_bytes": auxiliary.total_memory(),
+                "available_bytes": available,
+                "reserve_bytes": auxiliary.reserve_bytes,
+                "baseline_bytes": auxiliary.baseline_bytes,
+            },
+            "error": store.error,
+        }
+
+    @app.get("/api/footprints")
+    async def footprints():
+        return footprint_view()
+
+    @app.post("/api/footprints/record")
+    async def footprint_record():
+        record = manager.tracker.record_now("recorded by operator") if manager.tracker else None
+        if record is None:
+            raise HTTPException(409, "No loaded chat model with memory samples to record")
+        return record.public()
+
+    @app.post("/api/footprints/forget")
+    async def footprint_forget(payload: FootprintForget):
+        return {"removed": store.forget(payload.kind, payload.key)}
+
+    @app.post("/api/footprints/calibrate")
+    async def footprint_calibrate(payload: FootprintCalibrate):
+        """Reload a chat model at its maximum context and record what it holds.
+
+        A guard watches available memory during the load and the settle period and unloads
+        the engine if it falls below ``footprints.abort_below_available_bytes``.
+        """
+        enforce_lease()
+        manager.check_update()
+        if manager.lifecycle_busy:
+            raise HTTPException(409, "Lifecycle operation already running")
+        if manager.active:
+            raise HTTPException(409, "Engine is processing requests")
+        model_cfg = config["engines"].get(payload.engine, {}).get("models", {}).get(payload.model)
+        if model_cfg is None or not model_cfg.get("enabled", True):
+            raise HTTPException(404, "Unknown or disabled model for engine")
+        limits = model_cfg.get("context_limits", {})
+        context = limits.get("max") or model_cfg.get("context")
+        abort_below = footprint_options.get("abort_below_available_bytes", 1024**3)
+        tracker = manager.tracker
+        aborted = {}
+
+        async def guard():
+            while True:
+                await asyncio.sleep(1)
+                try:
+                    available = await asyncio.to_thread(effective_available_memory)
+                except (OSError, ValueError):
+                    continue
+                if available < abort_below:
+                    aborted["available"] = available
+                    await manager.unload(True)
+                    return
+
+        watcher = asyncio.create_task(guard())
+        try:
+            try:
+                await manager.load_model(
+                    payload.model, False, engine=payload.engine, context=context
+                )
+                if not aborted:
+                    await asyncio.sleep(tracker.settle_seconds + tracker.interval + 1)
+            except (OSError, RuntimeError, TimeoutError):
+                raise HTTPException(
+                    503, "Backend startup failed; inspect local engine log"
+                ) from None
+            except HTTPException:
+                if aborted:
+                    raise HTTPException(
+                        503,
+                        f"Calibration aborted: available memory fell to "
+                        f"{aborted['available'] >> 20} MiB; the engine was unloaded",
+                    ) from None
+                raise
+        finally:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+            await refresh_maintenance()
+        if aborted:
+            raise HTTPException(
+                503,
+                f"Calibration aborted: available memory fell to {aborted['available'] >> 20} MiB",
+            )
+        record = tracker.record_now("calibrated at maximum context")
+        if record is None:
+            raise HTTPException(409, "No memory samples were taken; nothing recorded")
+        return {"context": context, "record": record.public()}
 
     @app.get("/v1/models")
     async def models():
@@ -733,68 +911,69 @@ def create_app(config, admin_key, inference_key, state_dir):
         from .memory_admission import MemoryAdmissionError
 
         service = auxiliary.get("transcription")
-        if not service.enabled or service.process is None:
-            raise HTTPException(409, "Transcription service is not enabled and loaded")
+        if not service.enabled or service.process is None or service.draining:
+            raise auxiliary.unavailable(service)
         if service.busy:
             raise HTTPException(429, "Service is busy", headers={"Retry-After": "1"})
+        # Upload buffering and audio decoding are admitted separately from the worker's own
+        # request budget (reserved inside ``infer``): the decode reservation is released
+        # before the worker reserves, so the two are never counted together.
         try:
-            async with auxiliary.memory.reserve(
-                2 * 1024**3 + 96 * 1024**2 + auxiliary.chat_reserve()
-            ):
-                data = bytearray()
-                async for chunk in request.stream():
-                    if len(data) + len(chunk) > 32 * 1024 * 1024:
-                        raise HTTPException(413, "Audio upload exceeds 32 MiB")
-                    data.extend(chunk)
-                request._body = bytes(data)
-                del data
-                async with request.form(
-                    max_files=1, max_fields=16, max_part_size=1024 * 1024
-                ) as form:
-                    if set(form.keys()) - {
-                        "file",
-                        "model",
-                        "language",
-                        "response_format",
-                        "timestamp_granularities[]",
-                    }:
-                        raise HTTPException(400, "Unsupported transcription parameter")
-                    upload = form.get("file")
-                    model_id = form.get("model")
-                    response_format = form.get("response_format", "json")
-                    language = form.get("language")
-                    granularities = form.getlist("timestamp_granularities[]")
-                    if not hasattr(upload, "read") or not isinstance(model_id, str):
-                        raise HTTPException(400, "File and model are required")
-                    if response_format not in ("json", "verbose_json"):
-                        raise HTTPException(400, "Unsupported response format")
-                    if language is not None and (
-                        not isinstance(language, str) or len(language) > 16
-                    ):
-                        raise HTTPException(400, "Invalid language")
-                    if any(x not in ("word", "segment") for x in granularities):
-                        raise HTTPException(400, "Unsupported timestamp granularity")
-                    with tempfile.TemporaryDirectory(
-                        prefix="audio-", dir=manager.state_dir
-                    ) as work:
-                        source, decoded = Path(work) / "source", Path(work) / "audio.wav"
-                        with source.open("wb") as out:
-                            while piece := await upload.read(65536):
-                                out.write(piece)
-                        try:
-                            await asyncio.wait_for(decode_audio(source, decoded), timeout=600)
-                        except (OSError, asyncio.TimeoutError):
-                            raise HTTPException(
-                                503, "Audio decoder unavailable or timed out"
-                            ) from None
-                        result = await auxiliary.infer(
-                            "transcription", model_id, {"path": str(decoded), "language": language}
-                        )
-                if response_format == "json":
-                    return {"text": result["text"]}
-                return {"task": "transcribe", **result}
+            _admitted, decode_token = await auxiliary.memory.acquire(
+                2 * 1024**3 + 96 * 1024**2 + auxiliary.chat_growth()
+            )
         except MemoryAdmissionError as exc:
-            raise HTTPException(503, str(exc)) from None
+            raise HTTPException(
+                503, str(exc), headers={"X-IGM-Code": "insufficient_memory", "Retry-After": "30"}
+            ) from None
+        try:
+            data = bytearray()
+            async for chunk in request.stream():
+                if len(data) + len(chunk) > 32 * 1024 * 1024:
+                    raise HTTPException(413, "Audio upload exceeds 32 MiB")
+                data.extend(chunk)
+            request._body = bytes(data)
+            del data
+            async with request.form(max_files=1, max_fields=16, max_part_size=1024 * 1024) as form:
+                if set(form.keys()) - {
+                    "file",
+                    "model",
+                    "language",
+                    "response_format",
+                    "timestamp_granularities[]",
+                }:
+                    raise HTTPException(400, "Unsupported transcription parameter")
+                upload = form.get("file")
+                model_id = form.get("model")
+                response_format = form.get("response_format", "json")
+                language = form.get("language")
+                granularities = form.getlist("timestamp_granularities[]")
+                if not hasattr(upload, "read") or not isinstance(model_id, str):
+                    raise HTTPException(400, "File and model are required")
+                if response_format not in ("json", "verbose_json"):
+                    raise HTTPException(400, "Unsupported response format")
+                if language is not None and (not isinstance(language, str) or len(language) > 16):
+                    raise HTTPException(400, "Invalid language")
+                if any(x not in ("word", "segment") for x in granularities):
+                    raise HTTPException(400, "Unsupported timestamp granularity")
+                with tempfile.TemporaryDirectory(prefix="audio-", dir=manager.state_dir) as work:
+                    source, decoded = Path(work) / "source", Path(work) / "audio.wav"
+                    with source.open("wb") as out:
+                        while piece := await upload.read(65536):
+                            out.write(piece)
+                    try:
+                        await asyncio.wait_for(decode_audio(source, decoded), timeout=600)
+                    except (OSError, asyncio.TimeoutError):
+                        raise HTTPException(503, "Audio decoder unavailable or timed out") from None
+                    auxiliary.memory.release(decode_token)
+                    result = await auxiliary.infer(
+                        "transcription", model_id, {"path": str(decoded), "language": language}
+                    )
+            if response_format == "json":
+                return {"text": result["text"]}
+            return {"task": "transcribe", **result}
+        finally:
+            auxiliary.memory.release(decode_token)  # idempotent
 
     @app.post("/v1/{endpoint}")
     async def infer(endpoint: str, request: Request):
