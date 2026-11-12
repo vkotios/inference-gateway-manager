@@ -20,6 +20,10 @@ This release adds optional CPU transcription and embeddings services that run be
 - Portal: the status tiles (inference activity, system memory, GPU, host/API) sit in an equal-size left rail beside the work cards. "Transcription and embeddings" is now "Auxiliary services", built like the engine card, with a visible footprint table and Calibrate buttons (also next to Load model).
 - The MCP adapter now exposes eight tools instead of six, and the installer asks one additional question.
 
+### Security
+
+- Transcription decoding is restricted to local files and common audio and video containers (ffmpeg `-protocol_whitelist file,pipe` and `-format_whitelist`). Crafted playlists, concat or SDP scripts can no longer make ffmpeg open network addresses or other files on the gateway's behalf. Uploads in a format outside the allowlist are refused with a 400.
+
 ### Upgrading from 1.0.0
 
 No configuration change is required. The state directory gains `footprints.json` and `auxiliary-state.json`; older versions ignore them. Chat models without a recorded footprint unload the services when loaded; load each model once (or use Calibrate) to record it. Gateway package upgrades remain manual: see [installation](docs/installation.md#existing-installations-and-updates).

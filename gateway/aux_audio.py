@@ -7,6 +7,14 @@ from fastapi import HTTPException
 
 from .core import finish_cleanup
 
+# The upload is untrusted and has no extension, so ffmpeg chooses the demuxer by probing its
+# contents. Without limits a crafted playlist or script (HLS, concat, SDP) can make ffmpeg open
+# network addresses or other local files on the gateway's behalf. Allow only local files and
+# real audio/video containers. Names are ffmpeg demuxer names (for example "mov" covers the
+# MP4/M4A/3GP family and "matroska" covers MKA and WebM).
+ALLOWED_PROTOCOLS = "file,pipe"
+ALLOWED_FORMATS = "wav,mp3,flac,ogg,mov,mp4,m4a,matroska,webm,aac,aiff,amr,asf,ac3,caf,w64,wv"
+
 
 async def decode_audio(source, target, max_seconds=7200):
     """Decode to mono PCM while enforcing the decoded byte limit, not metadata."""
@@ -19,6 +27,10 @@ async def decode_audio(source, target, max_seconds=7200):
         "-nostdin",
         "-v",
         "error",
+        "-protocol_whitelist",
+        ALLOWED_PROTOCOLS,
+        "-format_whitelist",
+        ALLOWED_FORMATS,
         "-i",
         str(source),
         "-vn",
