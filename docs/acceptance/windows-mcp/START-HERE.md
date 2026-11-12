@@ -152,7 +152,7 @@ using the completed `claude-desktop-windows.json` template.
 
 If it already has servers, add or replace only `igm` inside its existing `mcpServers`
 object. Keep the other entries and valid JSON commas. Quit Claude Desktop completely,
-reopen it, and verify that the local `igm` server exposes six gateway tools.
+reopen it, and verify that the local `igm` server exposes eight gateway tools.
 For the OpenCode task, use a local **Code** session with terminal access.
 
 ### Claude Code CLI

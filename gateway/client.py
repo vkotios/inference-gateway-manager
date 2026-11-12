@@ -127,6 +127,12 @@ class GatewayClient:
     async def telemetry(self):
         return await self.request("GET", "/api/telemetry")
 
+    async def services(self):
+        return await self.request("GET", "/api/services")
+
+    async def footprints(self):
+        return await self.request("GET", "/api/footprints")
+
     async def load(self, engine, model, *, context=None, reasoning=None, system_prompt=None):
         body = {"engine": model_id(engine), "model": model_id(model), "force": False}
         if context is not None:
