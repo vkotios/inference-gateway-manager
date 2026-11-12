@@ -3,7 +3,7 @@
 Run `bash installer/install.sh` from a complete repository checkout on the Linux inference host, as the unprivileged account that will own the gateway and engines. Python 3.11+ with venv/pip support is required. Package installation needs access to the Python package index. Engines, ROCm/CUDA dependencies and compatible weights must be installed independently; this installer does not download weights, install or update engines, or alter GPU settings.
 
 ```sh
-git clone --branch v1.0.0 https://github.com/vkotios/inference-gateway-manager.git
+git clone --branch v2.0.0 https://github.com/vkotios/inference-gateway-manager.git
 cd inference-gateway-manager
 bash installer/install.sh
 ```
