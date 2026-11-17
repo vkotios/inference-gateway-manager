@@ -21,11 +21,30 @@ Configure an `auxiliary` object in the gateway's administrator-owned JSON config
 }
 ```
 
-Model memory is **measured, not configured**. `load_bytes` and `request_bytes` are optional first-load seeds in bytes; without them the first load uses a conservative probation budget (four times the model's size on disk, at least 1 GiB). After a load the gateway records the worker's resident size and raises the recorded peak as requests are served, so models of any size and any family are handled by the same rules. `minimum_free_bytes` is the host reserve, `host_baseline_bytes` the memory used by everything else on the host (operating system, desktop, other services); both are subtracted from total memory to give the budget. `chat_growth_bytes` (default 0) optionally reserves extra live headroom while a chat model is loaded.
+For Whisper and Sentence Transformers, `load_bytes` and `request_bytes` are optional first-load seeds in bytes. Without them the first load uses a conservative probation budget based on four times the model's size on disk, with a minimum of 1 GiB. After a load the gateway records the worker's resident size and raises the recorded peak as requests are served. `minimum_free_bytes` is the host reserve. `host_baseline_bytes` accounts for the operating system, desktop, and other host services. Both are subtracted from total memory to give the budget. `chat_growth_bytes` (default 0) optionally reserves extra live headroom while a chat model is loaded.
 
 The control API exposes `GET /api/services` and `POST /api/services/{transcription|embeddings}/{enable|disable|load|unload}`. All POSTs take JSON; use `{}` except for load, which takes `{"model":"MODEL_ID"}`. The portal provides the same controls. Enable, then select and load. Disable rejects while work is active; unloading is explicit and also rejects while active. A worker processes one request at a time, but the two workers can run concurrently. Inference credentials can call `POST /v1/audio/transcriptions` and `POST /v1/embeddings`, but cannot control services.
 
 The transcription endpoint accepts multipart `file`, `model`, optional `language`, `response_format` (`json` or `verbose_json`), and `timestamp_granularities[]` (`word`, `segment`). The verbose response includes word and segment timestamps and duration. It is ASR only, not speaker diarization. The implementation caps compressed uploads at 32 MiB and decoded audio at two hours; it returns an error instead of truncating. Audio is decoded in a separate process with a 2 GiB address-space limit and a corresponding memory reservation, to a private temporary file in the gateway state directory that is removed on completion. Because an upload is untrusted, ffmpeg may open only local files (`-protocol_whitelist file,pipe`) and only common audio and video containers (WAV, MP3, FLAC, Ogg/Vorbis/Opus, MP4/M4A/3GP, Matroska/WebM, AAC, AIFF, AMR, ASF/WMA, AC3, CAF, W64 and WavPack). Playlists, concat or SDP scripts and network protocols are refused with a 400, so a crafted upload cannot make the gateway fetch addresses or read other files. A format outside that list needs converting to one of them first. The embeddings endpoint accepts a string or up to 64 strings, with `float` or `base64` encoding. It refuses inputs that exceed the model token limit. It returns normalized embeddings and token usage. Models differ in vector dimensions and vector spaces: rebuild indexes when changing models, revisions, normalization, or query/document instruction policy. Qwen3 supports instruction-aware retrieval, but this generic endpoint does not add query instructions automatically.
+
+## GGUF embeddings with llama.cpp
+
+Add an entry like the following under `auxiliary.embeddings.models`. Use an embedding GGUF with a pooled output and a Linux `llama-server` build that supports Unix socket listeners, `--fit`, and `--no-repack`. The gateway starts a CPU-only process through `prlimit` and connects over a private Unix socket. The embeddings service keeps one model loaded at a time and uses the same load controls and `/v1/embeddings` endpoint for both backends.
+
+```json
+"local-gguf-embeddings": {
+  "backend": "llama.cpp",
+  "path": "/srv/models/embedding-model.gguf",
+  "runner": "/usr/local/bin/llama-server",
+  "threads": 8,
+  "context": 2048,
+  "repack": false,
+  "load_bytes": 3221225472,
+  "request_bytes": 536870912
+}
+```
+
+Set the required load and request budgets from measurements with your model and workload. They are minimum allowances for admission and the gateway also accounts for larger recorded usage. With `context` set to 2,048, each input can contain up to 2,047 tokens, including any model-specific prompts. The gateway splits larger lists into internal batches of at most eight inputs within the configured token budget. Clients can include query or document prompts directly in `input` when their model requires them.
 
 ## Memory, chat priority and footprints
 

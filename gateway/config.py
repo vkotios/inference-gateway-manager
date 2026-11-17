@@ -118,7 +118,21 @@ def validate(config):
             if model_id in auxiliary_names:
                 raise ValueError("Auxiliary model IDs must be unique")
             auxiliary_names.add(model_id)
-            if set(spec) - {"path", "load_bytes", "request_bytes", "threads"}:
+            fields = {"path", "load_bytes", "request_bytes", "threads"}
+            if name == "embeddings" and spec.get("backend") == "llama.cpp":
+                fields |= {"backend", "runner", "context", "repack"}
+                if (
+                    not isinstance(spec.get("runner"), str)
+                    or not Path(spec["runner"]).is_absolute()
+                ):
+                    raise ValueError("llama-server runner path must be absolute")
+                if type(spec.get("context")) is not int or not 128 <= spec["context"] <= 32768:
+                    raise ValueError("GGUF embeddings context must be between 128 and 32768 tokens")
+                if type(spec.get("repack", False)) is not bool:
+                    raise ValueError("GGUF embeddings repack must be a boolean")
+                if not {"load_bytes", "request_bytes"} <= set(spec):
+                    raise ValueError("GGUF embeddings require load and request memory budgets")
+            if set(spec) - fields:
                 raise ValueError("Invalid auxiliary model fields")
             if not isinstance(spec.get("path"), str) or not Path(spec["path"]).is_absolute():
                 raise ValueError("Auxiliary model path must be absolute")
