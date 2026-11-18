@@ -44,7 +44,7 @@ Add an entry like the following under `auxiliary.embeddings.models`. Use an embe
 }
 ```
 
-Set the required load and request budgets from measurements with your model and workload. They are minimum allowances for admission and the gateway also accounts for larger recorded usage. With `context` set to 2,048, each input can contain up to 2,047 tokens, including any model-specific prompts. The gateway splits larger lists into internal batches of at most eight inputs within the configured token budget. Clients can include query or document prompts directly in `input` when their model requires them.
+Set the required load and request budgets from measurements with your model and workload. They are minimum allowances for admission and the gateway also accounts for larger recorded usage. With `context` set to 2,048, each input can contain up to 2,047 tokens, including any model-specific prompts. The gateway splits larger lists into internal batches of at most eight inputs within the configured token budget. Up to seven requests can wait behind the active GGUF request. The gateway returns HTTP 429 if the queue is full or a request waits longer than 60 seconds. Clients can include query or document prompts directly in `input` when their model requires them.
 
 ## Memory, chat priority and footprints
 

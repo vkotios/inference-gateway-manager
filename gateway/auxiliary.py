@@ -42,6 +42,8 @@ from .memory_admission import (
 GIB = 1024**3
 RESTORE_POLICIES = ("never", "after_clean_shutdown", "on_demand")
 DEFAULT_DRAIN = {"embeddings": 30, "transcription": 600}
+GGUF_REQUEST_LIMIT = 8
+GGUF_QUEUE_TIMEOUT = 60
 MAX_FAILED_RESTORES_PER_HOUR = 3
 MAX_HOLDOFF_SECONDS = 7 * 24 * 3600
 STATE_VERSION = 1
@@ -92,6 +94,8 @@ class Service:
     loading_model: str | None = None
     process: object = None
     llama_directory: tempfile.TemporaryDirectory | None = None
+    llama_requests: int = 0
+    llama_request_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     busy: bool = False
     draining: bool = False
     loading_task: object = None
@@ -770,9 +774,32 @@ class Auxiliary:
         return HTTPException(409, "Requested service model is not enabled and loaded")
 
     async def infer(self, name, model, payload):
+        service = self.get(name)
+        if service.models.get(model, {}).get("backend") != "llama.cpp":
+            return await self._infer(service, model, payload)
+
+        # Wait before reserving RAM so only the active GGUF request holds a reservation.
+        if service.llama_requests >= GGUF_REQUEST_LIMIT:
+            raise refusal(429, "Embedding request queue is full", "embedding_queue_full", 1)
+        service.llama_requests += 1
+        try:
+            try:
+                async with asyncio.timeout(GGUF_QUEUE_TIMEOUT):
+                    await service.llama_request_lock.acquire()
+            except TimeoutError:
+                raise refusal(
+                    429, "Embedding request queue timed out", "embedding_queue_timeout", 1
+                ) from None
+            try:
+                return await self._infer(service, model, payload)
+            finally:
+                service.llama_request_lock.release()
+        finally:
+            service.llama_requests -= 1
+
+    async def _infer(self, service, model, payload):
         if hasattr(self.manager, "check_update"):
             self.manager.check_update()
-        service = self.get(name)
         async with service.lock:
             if service.draining:
                 raise self.unavailable(service)
@@ -786,7 +813,7 @@ class Auxiliary:
             service.busy = True
             process = service.process
             llama_directory = service.llama_directory
-            footprint = self.aux_footprint(name, model)
+            footprint = self.aux_footprint(service.name, model)
             budget = footprint.request_estimate_bytes
         try:
             try:
