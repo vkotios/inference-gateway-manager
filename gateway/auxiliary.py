@@ -16,11 +16,12 @@ import os
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from fastapi import HTTPException
 
+from . import aux_llama
 from .core import finish_cleanup
 from .footprint_recorder import process_resident_bytes
 from .footprints import (
@@ -41,6 +42,8 @@ from .memory_admission import (
 GIB = 1024**3
 RESTORE_POLICIES = ("never", "after_clean_shutdown", "on_demand")
 DEFAULT_DRAIN = {"embeddings": 30, "transcription": 600}
+GGUF_REQUEST_LIMIT = 8
+GGUF_QUEUE_TIMEOUT = 60
 MAX_FAILED_RESTORES_PER_HOUR = 3
 MAX_HOLDOFF_SECONDS = 7 * 24 * 3600
 STATE_VERSION = 1
@@ -90,6 +93,9 @@ class Service:
     desired_model: str | None = None  # what the operator last asked to have loaded
     loading_model: str | None = None
     process: object = None
+    llama_directory: tempfile.TemporaryDirectory | None = None
+    llama_requests: int = 0
+    llama_request_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     busy: bool = False
     draining: bool = False
     loading_task: object = None
@@ -270,6 +276,12 @@ class Auxiliary:
         spec = self.get(name).models[model]
         found = self.store.lookup(name, model, self.aux_fp(name, model))
         if found is not None:
+            if spec.get("backend") == "llama.cpp":
+                return replace(
+                    found,
+                    steady_bytes=max(found.steady_bytes, spec["load_bytes"]),
+                    request_bytes=max(found.request_bytes, spec["request_bytes"]),
+                )
             return found
         if "load_bytes" in spec:
             request = spec.get("request_bytes", spec["load_bytes"])
@@ -436,8 +448,7 @@ class Auxiliary:
         result = {}
         for name, service in self.services.items():
             if service.process is not None and service.process.returncode is not None:
-                service.process = None
-                service.model = None
+                self._clear_worker(service)
             suspended = service.suspended_reason
             result[name] = {
                 "enabled": service.enabled,
@@ -600,33 +611,52 @@ class Auxiliary:
             except MemoryAdmissionError as exc:
                 raise refusal(503, str(exc), "insufficient_memory", 60) from None
         try:
+            self._clear_worker(service)
+            llama = spec.get("backend") == "llama.cpp"
+            memory_limit = max(8 * GIB, 4 * footprint.needs_bytes)
             env = os.environ.copy()
             for key in ("IGM_CONTROL_KEY", "IGM_INFERENCE_KEY"):
                 env.pop(key, None)
             env.update(
                 IGM_AUX_THREADS=str(spec.get("threads", 4)),
-                IGM_AUX_MEMORY_LIMIT=str(max(8 * GIB, 4 * footprint.needs_bytes)),
+                IGM_AUX_MEMORY_LIMIT=str(memory_limit),
                 HF_HUB_OFFLINE="1",
             )
             try:
+                if llama:
+                    service.llama_directory = tempfile.TemporaryDirectory(
+                        prefix="igm-embed-", dir="/tmp", ignore_cleanup_errors=True
+                    )
+                    args = aux_llama.launch_args(spec, service.llama_directory.name, memory_limit)
+                else:
+                    args = [
+                        self.options.get("worker_python", sys.executable),
+                        str(Path(__file__).with_name("aux_worker.py")),
+                        name,
+                        spec["path"],
+                    ]
                 process = await asyncio.create_subprocess_exec(
-                    self.options.get("worker_python", sys.executable),
-                    str(Path(__file__).with_name("aux_worker.py")),
-                    name,
-                    spec["path"],
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
+                    *args,
+                    stdin=asyncio.subprocess.DEVNULL if llama else asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL if llama else asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
                     env=env,
                     limit=16 * 1024 * 1024,
                 )
+            except asyncio.CancelledError:
+                self._clear_worker(service)
+                raise
             except OSError:
+                self._clear_worker(service)
                 raise refusal(503, "Auxiliary worker failed to start", "worker_failed") from None
             service.process = process
             try:
-                line = await asyncio.wait_for(process.stdout.readline(), timeout=180)
-                if not line or json.loads(line).get("ready") is not True:
-                    raise ValueError("worker did not become ready")
+                if llama:
+                    await aux_llama.wait_ready(process, service.llama_directory.name)
+                else:
+                    line = await asyncio.wait_for(process.stdout.readline(), timeout=180)
+                    if not line or json.loads(line).get("ready") is not True:
+                        raise ValueError("worker did not become ready")
             except asyncio.CancelledError:
                 await finish_cleanup(asyncio.create_task(self._stop(service)))
                 raise
@@ -650,8 +680,14 @@ class Auxiliary:
                 except ProcessLookupError:
                     pass
             await process.wait()
+        self._clear_worker(service)
+
+    def _clear_worker(self, service):
         service.process = None
         service.model = None
+        if service.llama_directory is not None:
+            service.llama_directory.cleanup()
+            service.llama_directory = None
 
     # -- measurement of the workers themselves ----------------------------------------
 
@@ -739,9 +775,32 @@ class Auxiliary:
         return HTTPException(409, "Requested service model is not enabled and loaded")
 
     async def infer(self, name, model, payload):
+        service = self.get(name)
+        if service.models.get(model, {}).get("backend") != "llama.cpp":
+            return await self._infer(service, model, payload)
+
+        # Wait before reserving RAM so only the active GGUF request holds a reservation.
+        if service.llama_requests >= GGUF_REQUEST_LIMIT:
+            raise refusal(429, "Embedding request queue is full", "embedding_queue_full", 1)
+        service.llama_requests += 1
+        try:
+            try:
+                async with asyncio.timeout(GGUF_QUEUE_TIMEOUT):
+                    await service.llama_request_lock.acquire()
+            except TimeoutError:
+                raise refusal(
+                    429, "Embedding request queue timed out", "embedding_queue_timeout", 1
+                ) from None
+            try:
+                return await self._infer(service, model, payload)
+            finally:
+                service.llama_request_lock.release()
+        finally:
+            service.llama_requests -= 1
+
+    async def _infer(self, service, model, payload):
         if hasattr(self.manager, "check_update"):
             self.manager.check_update()
-        service = self.get(name)
         async with service.lock:
             if service.draining:
                 raise self.unavailable(service)
@@ -750,16 +809,22 @@ class Auxiliary:
             if service.busy:
                 raise HTTPException(429, "Service is busy", headers={"Retry-After": "1"})
             if service.process.returncode is not None:
-                service.process = None
-                service.model = None
+                self._clear_worker(service)
                 raise HTTPException(503, "Service worker exited")
             service.busy = True
             process = service.process
-            footprint = self.aux_footprint(name, model)
+            llama_directory = service.llama_directory
+            footprint = self.aux_footprint(service.name, model)
             budget = footprint.request_estimate_bytes
         try:
             try:
                 async with self.memory.reserve(budget + self.chat_growth()):
+                    if llama_directory is not None:
+                        result = await aux_llama.embed(
+                            llama_directory.name, payload["input"], service.models[model]["context"]
+                        )
+                        self._observe_request(service)
+                        return result
                     try:
                         process.stdin.write(json.dumps(payload).encode() + b"\n")
                         await process.stdin.drain()

@@ -43,7 +43,11 @@ class Footprint:
         """
         if self.kind == CHAT:
             return self.request_bytes
-        return self.request_bytes if self.requests_observed else self.steady_bytes
+        return (
+            self.request_bytes
+            if self.requests_observed or self.request_bytes
+            else self.steady_bytes
+        )
 
     @property
     def needs_bytes(self):
@@ -276,15 +280,30 @@ def path_identity(path):
 
 def aux_fingerprint(kind, model, spec):
     path = Path(spec["path"])
-    return fingerprint(
-        {
-            "kind": kind,
-            "model": model,
-            "path": str(path),
-            "threads": spec.get("threads", 4),
-            "id": path_identity(path),
-        }
-    )
+    data = {
+        "kind": kind,
+        "model": model,
+        "path": str(path),
+        "threads": spec.get("threads", 4),
+        "id": path_identity(path),
+    }
+    if spec.get("backend") == "llama.cpp":
+        runner = Path(spec["runner"])
+        identities = []
+        for file in (path, runner):
+            try:
+                stat = file.stat()
+                identities.append((stat.st_ino, stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                identities.append(None)
+        data.update(
+            backend=spec["backend"],
+            runner=str(runner),
+            context=spec["context"],
+            repack=spec.get("repack", False),
+            files=identities,
+        )
+    return fingerprint(data)
 
 
 @dataclass(frozen=True)
