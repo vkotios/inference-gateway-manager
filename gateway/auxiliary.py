@@ -138,6 +138,7 @@ class Auxiliary:
         self._wake = asyncio.Event()
         self._demand = set()
         self._task = None
+        self._closing = False
         self._load_state()
         manager.auxiliary = self
 
@@ -803,15 +804,21 @@ class Auxiliary:
     def start(self):
         """Begin the reconcile loop (no-op under the ``never`` policy)."""
         if self.policy != "never" and self._task is None:
+            self._closing = False
             self._task = asyncio.create_task(self._reconcile_loop())
             self.kick()
 
     async def _reconcile_loop(self):
-        while True:
+        # The loop also ends on ``_closing``: on Python 3.11 ``asyncio.wait_for`` can swallow a
+        # cancellation that arrives as its inner wait completes, which would leave this loop
+        # running and ``_stop_loop`` waiting for it forever.
+        while not self._closing:
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=30)
             except asyncio.TimeoutError:
                 pass
+            if self._closing:
+                break
             self._wake.clear()
             try:
                 await self.reconcile_once()
@@ -874,8 +881,10 @@ class Auxiliary:
     # -- shutdown ----------------------------------------------------------------------
 
     async def _stop_loop(self):
+        self._closing = True
         task, self._task = self._task, None
         if task is not None:
+            self._wake.set()
             task.cancel()
             try:
                 await task
