@@ -208,7 +208,7 @@ if sys.argv[1:3] == ['-m','venv']:
     folder=pathlib.Path(sys.argv[3])/'bin'
     folder.mkdir(parents=True)
     python=folder/'python'
-    python.write_text({("#!" + sys.executable + chr(10) + "import os, sys" + chr(10) + 'if sys.argv[1:3] == ["-m", "pip"]: raise SystemExit(0)' + chr(10) + "os.execv(" + repr(sys.executable) + ", [" + repr(sys.executable) + "] + sys.argv[1:])" + chr(10))!r})
+    python.write_text({("#!" + sys.executable + chr(10) + "import os, sys" + chr(10) + 'if sys.argv[1:3] == ["-m", "pip"]:' + chr(10) + '    open(os.environ.get("IGM_TEST_PIP_LOG", os.devnull), "a").write(" ".join(sys.argv[3:]) + chr(10))' + chr(10) + "    raise SystemExit(0)" + chr(10) + "os.execv(" + repr(sys.executable) + ", [" + repr(sys.executable) + "] + sys.argv[1:])" + chr(10))!r})
     python.chmod(0o755)
 else:
     os.execv({sys.executable!r}, [{sys.executable!r}]+sys.argv[1:])
@@ -226,6 +226,7 @@ else:
         "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
         "PYTHONPATH": str(ROOT),
         "IGM_TEST_SERVICE_LOG": str(tmp_path / "service.log"),
+        "IGM_TEST_PIP_LOG": str(tmp_path / "pip.log"),
     }
 
 
@@ -247,7 +248,7 @@ def test_scripted_onboarding_safely_configures_new_engines(tmp_path, mode):
     ]
     if mode == "system":
         answers += ["yes", "no"]
-    answers += ["yes"]
+    answers += ["no", "yes"]  # optional CPU services: no; then confirm
     result = subprocess.run(
         ["bash", str(INSTALLER)],
         input="\n".join(answers) + "\n",
@@ -282,8 +283,8 @@ def test_scripted_onboarding_safely_configures_new_engines(tmp_path, mode):
     "answers",
     [
         "",
-        "{target}\nall\n{models}\nno\nnone\nno\n",
-        "{target}\nall\n{models}\nyes\n0.0.0.0\n0.0.0.0/0\n\nnone\nyes\n",
+        "{target}\nall\n{models}\nno\nnone\nno\nno\n",
+        "{target}\nall\n{models}\nyes\n0.0.0.0\n0.0.0.0/0\n\nnone\nno\nyes\n",
     ],
 )
 def test_cancel_eof_or_invalid_network_leaves_target_untouched(tmp_path, answers):
@@ -298,6 +299,34 @@ def test_cancel_eof_or_invalid_network_leaves_target_untouched(tmp_path, answers
         timeout=10,
     )
     assert not target.exists() and not models.exists(), result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="Installer deliberately refuses root")
+@pytest.mark.parametrize("choice", ["yes", "no"])
+def test_cpu_services_packages_are_installed_only_when_requested(tmp_path, choice):
+    env = shell_environment(tmp_path)
+    target = tmp_path / "installed"
+    answers = [str(target), "ds4a", str(tmp_path / "models"), "no", "none", choice, "yes"]
+    result = subprocess.run(
+        ["bash", str(INSTALLER)],
+        input="\n".join(answers) + "\n",
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    pip_log = (tmp_path / "pip.log").read_text()
+    config = json.loads((target / "config.local.json").read_text())
+    assert "auxiliary" not in config  # no models are configured or downloaded either way
+    assert f"CPU services packages: {choice}" in result.stdout
+    if choice == "yes":
+        assert "torch --index-url https://download.pytorch.org/whl/cpu" in pip_log
+        assert f"{target}[auxiliary]" in pip_log
+        assert "docs/auxiliary-services.md" in result.stdout
+    else:
+        assert "torch" not in pip_log and "[auxiliary]" not in pip_log
+        assert "auxiliary-services.md" not in result.stdout
 
 
 def test_shell_syntax():
@@ -339,7 +368,7 @@ def test_shell_refuses_existing_install_before_copying_or_installing(tmp_path):
 def test_shell_all_selection_matches_public_catalog(tmp_path):
     env = shell_environment(tmp_path)
     target = tmp_path / "all-engines"
-    answers = [str(target), "all", str(tmp_path / "models"), "no", "none", "yes"]
+    answers = [str(target), "all", str(tmp_path / "models"), "no", "none", "no", "yes"]
     result = subprocess.run(
         ["bash", str(INSTALLER)],
         input="\n".join(answers) + "\n",

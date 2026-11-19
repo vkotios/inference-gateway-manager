@@ -15,6 +15,7 @@ import httpx
 import psutil
 from fastapi import HTTPException
 
+from .footprints import chat_fingerprint
 from .settings import select
 
 
@@ -84,6 +85,8 @@ class Manager:
         self.launch_id = None
         # Set by the API layer when a maintenance lease directory is configured.
         self.lease_guard = None
+        self.auxiliary = None
+        self.tracker = None  # footprint recorder, set by the API layer
         self.update_blocked = False
         self.update_authorized = ContextVar("igm_update_authorized", default=False)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=5), trust_env=False)
@@ -219,7 +222,16 @@ class Manager:
             self.phase = "error"
             self.last_error = "Backend exited; reload using control API"
 
+    def mark_ready(self):
+        self.phase = "ready"
+        if self.tracker is not None:
+            self.tracker.start()
+        if self.auxiliary is not None:
+            self.auxiliary.kick()
+
     def reset_loaded(self):
+        if self.tracker is not None:
+            self.tracker.finish()
         if self.launch_config_path is not None:
             self.launch_config_path.unlink(missing_ok=True)
             self.launch_config_path = None
@@ -233,6 +245,8 @@ class Manager:
         self.launch_id = None
         self.last_error = None
         self.phase = "selected" if self.engine else "unloaded"
+        if self.auxiliary is not None:
+            self.auxiliary.kick()
 
     async def clear_requests(self):
         tasks = {entry.get("task") for entry in self.active.values()}
@@ -439,6 +453,10 @@ class Manager:
             await self._stop(force)
             if self.native_processes():
                 raise HTTPException(409, "Native engines still running; load refused")
+            if self.auxiliary is not None:
+                # The chat model has priority: unload only the auxiliary services that do not
+                # fit with it (all of them when its memory footprint is unrecorded).
+                await self.auxiliary.make_room_for_chat(target_engine, model, spec, settings)
             self.engine = target_engine
             self.active_spec = spec
             self.selected_settings = settings
@@ -457,6 +475,12 @@ class Manager:
             self.last_error = None
             self.launch_id = secrets.token_hex(24)
             try:
+                if self.tracker is not None:
+                    self.tracker.begin_load(
+                        f"{target_engine}/{model}",
+                        chat_fingerprint(target_engine, model, spec),
+                        settings["context"],
+                    )
                 argv = spec["argv"]
                 if "config_template" in spec:
                     self.launch_config_path = self.state_dir / f"launch-{self.launch_id}.json"
@@ -521,19 +545,19 @@ class Manager:
                             spec.get("probe", "slots") != "slots"
                             or await self.native_busy() is False
                         ):
-                            self.phase = "ready"
+                            self.mark_ready()
                             return
                         if time.monotonic() >= warmup_deadline:
                             # Slots never settled to a verified idle state;
                             # admission still fail-closes on unknown occupancy.
-                            self.phase = "ready"
+                            self.mark_ready()
                             await self.native_busy()
                             return
                     await asyncio.sleep(0.25)
                 if healthy:
                     # The server answered /health but the warmup hold outlasted
                     # startup_timeout; a working engine must not fail the load.
-                    self.phase = "ready"
+                    self.mark_ready()
                     await self.native_busy()
                     return
                 raise TimeoutError("Model startup timed out")

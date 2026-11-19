@@ -661,7 +661,7 @@ class Updates:
     async def idle(self):
         m = self.manager
         m.check_lease()
-        if m.lifecycle_busy or m.active:
+        if m.lifecycle_busy or m.active or (m.auxiliary is not None and m.auxiliary.active()):
             raise HTTPException(409, "Wait for idle maintenance")
         if (
             m.model
@@ -669,7 +669,7 @@ class Updates:
             and await m.native_busy() is not False
         ):
             raise HTTPException(409, "Native occupancy is busy or unknown")
-        if m.lifecycle_busy or m.active:
+        if m.lifecycle_busy or m.active or (m.auxiliary is not None and m.auxiliary.active()):
             raise HTTPException(409, "Work began during the idle check; retry later")
         m.capture_owned()
         if any(p not in m.owned for p in m.native_processes()):

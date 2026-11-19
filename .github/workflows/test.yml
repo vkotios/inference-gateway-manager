@@ -13,6 +13,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e '.[dev]'
       - run: python -m playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pytest -q
       - run: ruff check gateway tests installer
       - run: ruff format --check gateway tests installer

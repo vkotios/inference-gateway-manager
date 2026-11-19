@@ -264,8 +264,13 @@ and macOS clients use the same entrypoint; real-device acceptance remains separa
 Credentials never belong in URLs or tool arguments. HTTP's interception limitation also
 applies to this adapter; use an HTTPS gateway URL when available.
 
-Tools: `gateway_catalog`, `gateway_status`, `gateway_telemetry`, `gateway_load`,
-`gateway_unload`, `gateway_delegate`. Discover → load explicitly → preserve the returned
+Tools: `gateway_catalog`, `gateway_status`, `gateway_telemetry`, `gateway_services`,
+`gateway_footprints`, `gateway_load`, `gateway_unload`, `gateway_delegate`. The two
+read-only service tools show the CPU transcription and embedding services and which chat
+models fit with them; there is no MCP tool that loads, unloads or calibrates those
+services, so an agent cannot interrupt a chat model for calibration. Loading a chat model
+can unload the services when they do not fit with it (see
+[auxiliary services](auxiliary-services.md)). Discover → load explicitly → preserve the returned
 `selection_id` → delegate using that ID. Loading can take several minutes: configure
 the harness's MCP timeout to allow the gateway's startup timeout (normally 900 seconds).
 All lifecycle tools use `force:false`. There are no recovery, shell or registration tools.

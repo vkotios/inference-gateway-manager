@@ -38,7 +38,9 @@ Never request credentials in chat, print environment dumps, put keys in prompts/
 | `gateway_catalog` | Discover enabled engine/model IDs and declared context/reasoning capabilities |
 | `gateway_status` | Observe readiness, effective `active_settings`, occupancy and `selection_id` |
 | `gateway_telemetry` | Read host measurements; missing values remain unknown |
-| `gateway_load` | Load exact `engine`, `model`, optional `context`, `reasoning`; always normal `force:false` |
+| `gateway_services` | Read the CPU transcription/embedding services: enabled, loaded, unloaded-for-chat reason, restore policy |
+| `gateway_footprints` | Read recorded memory footprints; for each chat model, whether it is calibrated and fits with the loaded services |
+| `gateway_load` | Load exact `engine`, `model`, optional `context`, `reasoning`; always normal `force:false`. Can unload the transcription/embedding services when they do not fit with the model or its footprint is not recorded |
 | `gateway_unload` | Normal non-force unload when authorized |
 | `gateway_delegate` | One bounded text inference request using the exact model and selection ID |
 

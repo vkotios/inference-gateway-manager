@@ -7,9 +7,9 @@
 
 **One engine. One model. One gateway.**
 
-[Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md)
+[Host setup](#install) · [Client setup](docs/clients.md#generic-openai-compatible-client) · [Agent/controller guide](docs/orchestration.md) · [Agent skill](skills/inference-gateway-manager/SKILL.md) · [Boot/recovery](docs/recovery.md) · [Transcription and embeddings](docs/auxiliary-services.md)
 
-A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar (ds4), Gufo, Lucebox, ds4a, Halogen, Halogen Flash, Talus and Strixite**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
+A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar (ds4), Gufo, Lucebox, ds4a, Halogen, Halogen Flash, Talus and Strixite**. Plain HTML/CSS/JavaScript UI; FastAPI API and streaming inference proxy, with optional CPU transcription and embeddings services and an optional remote stdio MCP adapter. No cloud inference, model download, shell-command API, or frontend build chain.
 
 ## What it does
 
@@ -24,6 +24,7 @@ A small Linux control plane for **llama.cpp, Strata, Kyojin, DwarfStar (ds4), Gu
 - An optional [maintenance lease](docs/maintenance-lease.md) lets a co-located job runner pause model loads while it uses the host's shared memory, with an operator override.
 - Optional [engine updates and rollback](docs/engine-updates.md): check installed/upstream revisions, stage a selected version, explicitly verify a designated model and retain the previous version for rollback. Problem reports are reviewable GitHub drafts.
 - [Generation metrics](docs/generation-metrics.md) report generation and prefill tokens/s, live and for the last request, in `/api/status` and on the dashboard.
+- Optional CPU [transcription and embeddings](docs/auxiliary-services.md) (`/v1/audio/transcriptions`, `/v1/embeddings`) run beside the chat model whenever the recorded memory footprints of everything loaded fit. The chat model always has priority: loading one unloads only the services that no longer fit. Footprints are recorded automatically and can be calibrated from the dashboard; a chat model with no recorded footprint unloads the services. Services never load by themselves unless you opt in to guarded restore.
 - Unknown counters remain null. RAM pressure is total minus available, **not model RSS**. Unified GPU memory counters may overlap RAM.
 
 ## Host versus client
@@ -38,19 +39,19 @@ For a walkthrough, Windows credentials, a smoke test and status-code troubleshoo
 
 ## Install
 
-Release **v1.0.0** requires Linux with pidfd support, Python 3.11+ with venv/pip, and independently installed engines, GPU dependencies and model weights.
+Release **v2.0.0** requires Linux with pidfd support, Python 3.11+ with venv/pip, and independently installed engines, GPU dependencies and model weights.
 
 ### Interactive host setup (recommended for a fresh installation)
 
 Run as the unprivileged account that will own the gateway and engines:
 
 ```sh
-git clone --branch v1.0.0 https://github.com/vkotios/inference-gateway-manager.git
+git clone --branch v2.0.0 https://github.com/vkotios/inference-gateway-manager.git
 cd inference-gateway-manager
 bash installer/install.sh
 ```
 
-Setup asks for an installation directory, any of the eleven supported engines, your models directory, loopback or specific LAN IP/subnet/hostname, and manual, user-service or system-service startup. Review the summary before confirming. The default installation directory is `~/.local/share/inference-gateway-manager`.
+Setup asks for an installation directory, any of the eleven supported engines, your models directory, loopback or specific LAN IP/subnet/hostname, manual, user-service or system-service startup, and optionally the CPU transcription and embeddings packages (default no). Review the summary before confirming. The default installation directory is `~/.local/share/inference-gateway-manager`.
 
 The installer creates a private configuration and two separate random credentials: **control** for dashboard/lifecycle operations and **inference** for ordinary clients. It prints their owner-only file location and your selected dashboard and `/v1` URLs; retrieve the keys locally on the server and supply the appropriate key to each client. Dashboard password login is separate. Existing configurations, keys, environments and nonempty destinations are refused.
 
@@ -60,7 +61,7 @@ Follow the [complete installation walkthrough](docs/installation.md) for prompts
 
 ### Manual source or wheel installation
 
-From a complete v1.0.0 checkout, use the following for manual setup. A [release wheel](https://github.com/vkotios/inference-gateway-manager/releases/tag/v1.0.0) can replace `pip install .`; obtain the matching example configuration separately. The interactive installer and documentation require the source checkout.
+From a complete v2.0.0 checkout, use the following for manual setup. A [release wheel](https://github.com/vkotios/inference-gateway-manager/releases/tag/v2.0.0) can replace `pip install .`; obtain the matching example configuration separately. The interactive installer and documentation require the source checkout.
 
 ```sh
 python3 -m venv .venv
@@ -78,7 +79,7 @@ Use the control key from the private credential file to log in, or enable [passw
 
 ### Existing installations and engine updates
 
-Do not rerun the fresh-install installer over an existing deployment. Back up private configuration, credentials, state and the previous environment, test the new gateway package separately, then switch through the existing supervisor during idle maintenance. See [gateway upgrade steps](docs/installation.md#existing-installations-and-updates).
+Do not rerun the fresh-install installer over an existing deployment. Back up private configuration, credentials, state and the previous environment, test the new gateway package separately, then switch through the existing supervisor during idle maintenance. See [gateway upgrade steps](docs/installation.md#existing-installations-and-updates). Upgrading from 1.0.0 needs no configuration change; see the [changelog](CHANGELOG.md).
 
 The opt-in [engine updater](docs/engine-updates.md) is separate from gateway upgrades. An administrator enrolls each engine with a trusted recipe. Check versions, stage a selected release, then explicitly authorize the designated model-load/inference tests before applying while idle. Normally one representative model per engine is sufficient; additional profiles can be selected when needed. The previous executable, environment and configuration are retained for rollback, including an offline configuration rollback command. A failed update can produce an editable GitHub issue draft for review; nothing is submitted automatically.
 
@@ -140,9 +141,15 @@ Authenticate `/api/*` with the control credential using the `Authorization` head
 | GET | `/api/model-files` | Browse administrator-approved model roots (control only) |
 | POST | `/api/models/inspect`, `/api/models` | Inspect existing artifacts, then save a reviewed registration |
 | POST | `/api/unload` | `{"force":false}`; stops engine, retains engine selection |
+| GET | `/api/services` | CPU service state: enabled, loaded model, unloaded-for-chat reason, restore policy, measured footprints |
+| POST | `/api/services/{transcription,embeddings}/{enable,disable,load,unload}` | `{}`; load takes `{"model":"ID"}` |
+| GET, POST | `/api/services/settings` | Restore policy (`never`, `after_clean_shutdown`, `on_demand`) and restore delay; applied immediately |
+| GET | `/api/footprints` | Recorded memory footprints and, per chat model, whether it is calibrated and fits with the loaded services |
+| POST | `/api/footprints/record`, `/api/footprints/forget`, `/api/footprints/calibrate` | Record the loaded model now, forget a record, or reload a chat model at maximum context and record it |
 | GET | `/v1/models` | Enabled models and loaded/unloaded status |
 | POST | `/v1/chat/completions` | Transparent Chat Completions proxy, including raw SSE |
 | POST | `/v1/completions`, `/v1/responses`, `/v1/messages` | Passed through only if the selected backend implements them |
+| POST | `/v1/embeddings`, `/v1/audio/transcriptions` | OpenAI-compatible CPU services; need an enabled, loaded service model (inference key) |
 
 Add `X-Client-Name` to label requests. Model IDs must match the currently loaded gateway model. Selecting a model in a coding client's picker **does not automatically switch the engine**. The optional MCP controller or an HTTP controller calls control APIs first. Controllers can send `X-IGM-Selection-ID` from status/load to refuse stale settings. HTTP 409 means busy/invalid lifecycle (including unknown native occupancy on a non-force stop); inference uses 503 for unknown occupancy, and startup or shutdown failures also use 503; 401/403 means credential/role rejection. Startup may take several minutes; `/api/status` remains available while loading. A force-cancelled loader receives 409 and unload retains the selected engine without a startup-error message. Inference JSON must contain finite numbers and at most 128 nesting levels (invalid payloads return 400).
 
@@ -157,6 +164,8 @@ See [client configuration](docs/clients.md). The stable base URL is `http://GATE
 Run the MCP adapter on the **client computer** that runs Claude or Codex; the gateway and model files stay on the Linux inference host. Replace `GATEWAY_HOST` with the local network IP of the computer running the gateway. Keep existing `IGM_CONTROL_KEY` and `IGM_INFERENCE_KEY` values; registration does not require new keys.
 
 For Windows, use the [single setup package and walkthrough](docs/acceptance/README.md). [Command-based registration](docs/mcp-registration.md) avoids manual configuration for Codex desktop/native CLI and Claude Code. Claude Desktop chat uses its own configuration file; registering through Claude Code alone does not configure that chat surface. An installer that safely merges every client's configuration is not included.
+
+Eight tools are offered: catalog, status, telemetry, load, unload and delegate, plus the read-only `gateway_services` and `gateway_footprints`. A chat load can unload the CPU services when they do not fit with it, so an agent should check those two before loading when other clients depend on the services. There is deliberately no MCP tool that enables, loads, unloads or calibrates the services.
 
 The [agent skill](skills/inference-gateway-manager/SKILL.md) remains useful: **MCP supplies tools; the skill supplies the operating procedure.** It covers model selection, readiness checks, context planning and handing a coding task to OpenCode. The skill is in this repository, not in the Python wheel or the Windows acceptance ZIP, and MCP registration does not install it. See [skill installation](docs/mcp-registration.md#install-the-companion-skill) for Claude Code and Codex.
 
