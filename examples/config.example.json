@@ -1105,6 +1105,21 @@
           "context": 32768,
           "ready_path": "/health",
           "probe": "gateway_only",
+          "chat_slots": 3,
+          "admission": {
+            "mode": "auto",
+            "reservedInteractive": {
+              "default": 0,
+              "timezone": "Europe/Athens",
+              "windows": [
+                {"days": ["mon", "tue", "wed", "thu", "fri"], "start": "08:00", "end": "20:00", "reserved": 1}
+              ]
+            },
+            "maxQueue": 32,
+            "interactiveTimeoutS": 120,
+            "batchTimeoutS": 900,
+            "borrowShortTokens": 512
+          },
           "context_limits": {
             "min": 4096,
             "max": 131072,

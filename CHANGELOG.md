@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Chat admission: a model with several chat slots queues requests that find no free slot (bounded, with per-class wait limits) instead of refusing them. `X-IGM-Priority: interactive|batch` (absent means interactive), a calendar-driven number of slots reserved for interactive use, and short-request borrowing of a reserved slot. Nothing is clamped or truncated. Refusals are `429` with `Retry-After` and `X-IGM-Code`. Single-slot loads and `admission.mode: single` keep the immediate `409`. See [chat admission](docs/admission.md).
+- Dashboard card for running and waiting requests with operator pause, reservation override, drop and abort (a reason is required and is sent to the client), plus an admission settings form saved in the state directory.
+- `/api/admission` endpoints and a cursored event log (`/api/admission/events`) that a coordinator can poll.
+
+### Changed
+
+- Records the `chat_slots` change that was running on the reference host before this release: `chat_slots` per model, a `chat_slots` block in `/api/status`, and a refusal only when no slot is free.
+
 ## v2.0.0
 
 This release adds optional CPU transcription and embeddings services that run beside the chat model, a model-agnostic memory ledger that decides what can coexist, and a reorganised portal.
