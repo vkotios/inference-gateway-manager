@@ -27,3 +27,12 @@ header>.badge{flex-shrink:0;max-width:none;white-space:nowrap}
 #aux-settings{margin:18px 0}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.rail{grid-template-columns:1fr 1fr;grid-auto-rows:auto}}
 @media(max-width:560px){.rail{grid-template-columns:1fr}.fptable thead{display:none}.fptable td{display:block;border-top:0;padding:2px 8px}.fptable tr{display:block;border-top:1px solid #2b333e;padding:8px 0}.fptable td.act{text-align:left}}
+.subhead{font-size:11px;letter-spacing:1.2px;color:#8293a2;margin:18px 0 4px;font-weight:600;text-transform:uppercase}
+.arow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:8px 0;border-top:1px solid #2b333e;font-size:13px;color:#cfd8e0}
+.arow:first-child{border-top:0}
+.arow .grow{flex:1 1 16rem;min-width:0;overflow-wrap:anywhere}
+.admission-actions{justify-content:flex-start;margin-top:14px}
+.daychecks{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px}
+#confirm-reason-field{display:grid;gap:8px;margin-top:14px;font-size:12px;color:#8293a2}
+#confirm-reason-field[hidden]{display:none}
+@media(max-width:600px){.admission-actions button{flex:1 1 100%}.arow button{flex:1 1 100%}}

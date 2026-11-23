@@ -98,3 +98,31 @@ def test_lucebox_generation_metrics_provider_is_accepted():
     validate_runtime(
         {"argv": ["fixture"], "base_url": "http://127.0.0.1:8011", "generation_metrics": "lucebox"}
     )
+
+
+def test_admission_blocks_are_validated_at_config_load():
+    from gateway.config import validate
+
+    spec = {"argv": ["fixture"], "base_url": "http://127.0.0.1:9001", "chat_slots": 3}
+    config = {"engines": {"one": {"models": {"fixture": spec}}}}
+    spec["admission"] = {
+        "mode": "auto",
+        "reservedInteractive": {
+            "default": 0,
+            "timezone": "Europe/Athens",
+            "windows": [{"days": ["mon"], "start": "08:00", "end": "20:00", "reserved": 1}],
+        },
+        "maxQueue": 16,
+    }
+    config["admission"] = {"batchTimeoutS": 600}
+    assert validate(config) == config
+    spec["admission"] = {"maxQueue": -1}
+    with pytest.raises(ValueError, match="maxQueue"):
+        validate(config)
+    spec["admission"] = {"bogus": 1}
+    with pytest.raises(ValueError, match="Unknown admission setting"):
+        validate(config)
+    del spec["admission"]
+    config["admission"] = {"mode": "turbo"}
+    with pytest.raises(ValueError, match="mode"):
+        validate(config)

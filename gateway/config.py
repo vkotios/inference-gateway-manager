@@ -269,11 +269,19 @@ def validate(config):
     ipaddress.ip_address(config.get("host", "127.0.0.1"))
     if not 1 <= config.get("port", 9000) <= 65535:
         raise ValueError("Invalid listening port")
+    if "admission" in config:
+        validate_admission(config["admission"])
     if "engine_updates" in config:
         from .updates import validate_options as validate_updates
 
         validate_updates(config)
     return config
+
+
+def validate_admission(block):
+    from .admission import validate_settings
+
+    validate_settings(block, partial=True)
 
 
 def validate_runtime(spec):
@@ -304,6 +312,10 @@ def validate_runtime(spec):
         raise ValueError("Model argv must be a nonempty string array")
     if spec.get("probe", "slots") not in ("slots", "gateway_only"):
         raise ValueError("Unknown occupancy probe")
+    if type(spec.get("chat_slots", 1)) is not int or spec.get("chat_slots", 1) < 1:
+        raise ValueError("chat_slots must be a positive integer")
+    if "admission" in spec:
+        validate_admission(spec["admission"])
     if not isinstance(spec.get("ready_path", "/health"), str) or not spec.get(
         "ready_path", "/health"
     ).startswith("/"):

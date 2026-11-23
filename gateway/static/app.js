@@ -59,10 +59,13 @@ function disconnect(message = "Signed out. Existing inference continues.") {
   $("file-path").textContent = ""; $("file-status").textContent = ""; $("file-root").replaceChildren(); listing = null; browserTarget = null;
   for (const id of ["password", "key"]) { $(id).type = "password"; $("show-" + id).textContent = "Show"; $("show-" + id).setAttribute("aria-label", id === "key" ? "Show control key" : "Show password"); }
   $("sessions-panel").hidden = true; $("force").checked = false;
-  showAuxServices(null); showFootprints(null); capabilities(); buttons(); notice(message);
+  showAuxServices(null); showFootprints(null);
+  if (typeof clearAdmission === "function") clearAdmission();
+  capabilities(); buttons(); notice(message);
 }
 function buttons() {
   if (typeof updateButtons === "function") updateButtons();
+  if (typeof updateAdmissionButtons === "function") updateAdmissionButtons();
   $("login-form").hidden = authenticated; $("session-bar").hidden = !authenticated;
   $("session-description").textContent = key ? "Connected with a control key · memory only" : "Signed in to this browser";
   $("sessions-toggle").disabled = !authenticated || Boolean(key);
@@ -345,7 +348,12 @@ async function poll() {
     state = s; recovery = r; $("connection").textContent = "CONNECTED"; $("phase").textContent = s.phase.toUpperCase();
     $("loaded").textContent = s.loaded_model ? `${s.selected_engine} / ${s.loaded_model}` : "No model loaded";
     const active = s.active_settings;
-    $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
+    const slots = s.chat_slots;
+    let slotText = "";
+    if (slots) slotText = slots.available == null
+      ? ` · Chat slot availability unknown (limit ${slots.total})`
+      : ` · Chat slots: ${slots.available}/${slots.total} available`;
+    $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}${slotText}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
     $("busy").textContent = s.busy === true ? "Processing" : s.busy === false ? "Idle" : "Unknown";
     $("activity").textContent = s.active_requests + " active gateway request(s)";
     $("generation").textContent = describeGeneration(s.generation);
@@ -363,6 +371,7 @@ async function poll() {
     $("cpu").textContent = t.cpu_percent == null ? "Unknown" : t.cpu_percent.toFixed(0) + "%";
     $("swap").textContent = "Swap used: " + gib(t.swap_used_bytes); $("updated").textContent = "UPDATED " + new Date().toLocaleTimeString();
     showMaintenance(s.maintenance); showAuxServices(aux);
+    if (typeof showAdmission === "function") showAdmission(s.admission);
     if (s.error) notice(s.error);
     buttons();
   } catch (error) {
@@ -378,15 +387,17 @@ async function connected(session = null) {
   notice(key ? "Connected. Control key stays in memory; refresh forgets it." : "Signed in. Browser access can be revoked from Browser sessions.");
 }
 let confirmationResolver = null;
-function askConfirmation(title, description, actionLabel) {
+function askConfirmation(title, description, actionLabel, needsReason = false) {
   if (confirmationResolver) return Promise.resolve(false);
-  $("confirm-cancel").disabled = false; $("confirm-accept").disabled = false;
+  $("confirm-cancel").disabled = false; $("confirm-accept").disabled = needsReason;
+  $("confirm-reason-field").hidden = !needsReason; $("confirm-reason").value = "";
   $("confirm-title").textContent = title; $("confirm-description").textContent = description; $("confirm-accept").textContent = actionLabel;
   return new Promise(resolve => { confirmationResolver = resolve; $("confirm-dialog").showModal(); $("confirm-cancel").focus(); });
 }
 function closeConfirmation(accepted) {
   const resolve = confirmationResolver; confirmationResolver = null; $("confirm-dialog").close(); resolve?.(accepted);
 }
+$("confirm-reason").addEventListener("input", () => { $("confirm-accept").disabled = !$("confirm-reason").value.trim(); });
 $("confirm-cancel").onclick = () => closeConfirmation(false);
 $("confirm-accept").onclick = () => closeConfirmation(true);
 $("confirm-dialog").addEventListener("cancel", event => { event.preventDefault(); closeConfirmation(false); });

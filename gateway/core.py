@@ -85,6 +85,8 @@ class Manager:
         self.launch_id = None
         # Set by the API layer when a maintenance lease directory is configured.
         self.lease_guard = None
+        # Set by the API layer: queued chat requests are refused when the loaded model goes away.
+        self.drain_queue = None
         self.auxiliary = None
         self.tracker = None  # footprint recorder, set by the API layer
         self.update_blocked = False
@@ -188,9 +190,9 @@ class Manager:
             self.active_settings["context"] = min(contexts)
             self.active_settings["context_source"] = "native_slots"
 
-    async def native_busy(self):
+    async def native_slots(self):
         if not self.model or self.phase == "unloaded":
-            return False
+            return None
         spec = self.spec()
         generation = (self.engine, self.model, self.launch_id, self.selection_id)
         settings = self.active_settings
@@ -213,9 +215,31 @@ class Manager:
                 or any(not isinstance(s.get("is_processing"), bool) for s in slots)
             ):
                 return None
-            return any(s["is_processing"] for s in slots)
+            return sum(s["is_processing"] for s in slots), len(slots)
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):
             return None
+
+    async def native_busy(self):
+        if not self.model or self.phase == "unloaded":
+            return False
+        slots = await self.native_slots()
+        return slots[0] > 0 if slots is not None else None
+
+    def chat_slots(self, native, admitted=0):
+        """Capacity of the loaded model. ``admitted`` counts requests the broker has started."""
+        if not self.model or self.phase != "ready":
+            return None
+        spec = self.spec()
+        limit = spec.get("chat_slots", 1)
+        used = max(len(self.active), admitted)
+        if spec.get("probe", "slots") == "slots":
+            if native is None:
+                return {"total": limit, "available": 0 if used >= limit else None}
+            native_busy, native_total = native
+            limit = min(limit, native_total)
+            # Native processing can already include requests admitted by the proxy.
+            used = max(used, native_busy)
+        return {"total": limit, "available": max(0, limit - used)}
 
     def refresh_liveness(self):
         if self.phase == "ready" and (self.process is None or self.process.poll() is not None):
@@ -229,7 +253,12 @@ class Manager:
         if self.auxiliary is not None:
             self.auxiliary.kick()
 
+    def drain(self):
+        if self.drain_queue is not None:
+            self.drain_queue()
+
     def reset_loaded(self):
+        self.drain()
         if self.tracker is not None:
             self.tracker.finish()
         if self.launch_config_path is not None:
@@ -291,6 +320,7 @@ class Manager:
             raise HTTPException(
                 409, "Engine busy or native occupancy unknown; retry or explicitly force"
             )
+        self.drain()
         self.phase = "stopping"
         if force:
             await self.clear_requests()

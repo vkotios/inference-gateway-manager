@@ -43,7 +43,7 @@ Compare the requested context, reasoning and system prompt with `active_settings
 
 1. **Acquire your orchestration-level exclusive ownership.** Centralize the lifecycle controller or use an external coordination mechanism spanning the work interval, not just the switch request. IGM does not issue a durable lease. Dashboard operators and other controllers can still race.
 2. **Discover the catalog and read status.** Select an enabled model under its actual engine. Treat catalog context as a configuration value, not proof of transport/tool compatibility.
-3. **Reuse when ready.** If the requested engine/model and reasoning settings match, `phase == "ready"`, and effective capacity covers the planned client budget, no lifecycle write is necessary. Workers may still receive a busy response; there is no queue.
+3. **Reuse when ready.** If the requested engine/model and reasoning settings match, `phase == "ready"`, and effective capacity covers the planned client budget, no lifecycle write is necessary. Workers may still receive a busy response: a single-slot model refuses with 409, while a several-slot model queues the request and answers 429 with `Retry-After` on timeout. See [chat admission](admission.md).
 4. **Before a change, inspect occupancy.** Active requests or `busy == true` mean wait/recheck. For native-slot backends, unknown `native_busy` is not idle. If the gateway is unloaded, unknown native-slot state can be normal; a `force:false` load remains subject to the gateway's unmanaged-process/admission checks. Do not invent an idle result to get past a refusal.
 5. **Select the engine with `force:false`.** Verify the returned/read-back selection. Selection alone does not load a model. Selecting the already-selected engine is normally a no-op, not an unload.
 6. **Load the model with `force:false`.** `/api/model` can remain pending for the model's startup duration; use a client timeout appropriate to the configured host startup timeout and resource conditions. There is no operation-ID polling API. On connection loss or timeout, re-read status before deciding whether to retry: do not assume the load completed or failed.
@@ -77,6 +77,7 @@ This is an operator walkthrough, not an implementation of locking, retry policy 
 ## Conflicts, interruption and failure
 
 - **401:** authentication failure. **403:** credential role, network, Host or Origin rejection. Do not weaken security to make a request pass.
+- **429:** the chat queue is full, the wait limit passed, or an operator dropped the request; honour `Retry-After` and read `X-IGM-Code` (see [chat admission](admission.md)).
 - **409:** admission/lifecycle conflict or invalid current selection/model. Re-read status and coordinate. Do not retry continuously and do not promote to force automatically.
 - **502:** upstream request/connection failure. **503:** unknown inference occupancy, unavailable backend or startup/shutdown failure. Preserve diagnostics, inspect status and ask an operator when reconciliation is needed.
 - Unmanaged native processes block loading. The gateway detects conflicts without claiming ownership; it does not grant an agent permission to kill unrelated processes.

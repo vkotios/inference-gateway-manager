@@ -23,6 +23,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from . import __version__
+from .admission import (
+    INTERACTIVE,
+    PRIORITIES,
+    SIZE_CLASSES,
+    Admission,
+    AdmissionRefused,
+    Capacity,
+    resolve_settings,
+)
 from .aux_audio import decode_audio
 from .auxiliary import Auxiliary
 from .browser_auth import COOKIE, BrowserAuth, install_routes, origin_allowed, session_io
@@ -122,9 +131,10 @@ class FootprintCalibrate(BaseModel):
 class InferenceLifetime:
     """Track the outer ASGI task, including socket drain after generator yield."""
 
-    def __init__(self, app, manager):
+    def __init__(self, app, manager, admission=None):
         self.app = app
         self.manager = manager
+        self.admission = admission
 
     async def __call__(self, scope, receive, send):
         if (
@@ -140,6 +150,8 @@ class InferenceLifetime:
             await self.app(scope, receive, send)
         finally:
             self.manager.active.pop(request_id, None)
+            if self.admission is not None:
+                self.admission.release_id(request_id)
 
 
 def create_app(config, admin_key, inference_key, state_dir):
@@ -158,6 +170,10 @@ def create_app(config, admin_key, inference_key, state_dir):
     )
     updates = Updates(config, Path(state_dir))
     generation = Metrics()
+    admission = Admission(manager.state_dir / "admission-state.json")
+    manager.drain_queue = lambda: admission.reject_queued(
+        409, "lifecycle", "Lifecycle operation in progress; retry when ready"
+    )
     lucebox_metrics = LuceboxMetrics()
     maintenance = (
         Maintenance(config["maintenance"], manager.state_dir) if "maintenance" in config else None
@@ -242,6 +258,7 @@ def create_app(config, admin_key, inference_key, state_dir):
                 await startup
             except asyncio.CancelledError:
                 pass
+            await admission.close()
             await updates.close()
             await auxiliary.close()
             await manager.close()
@@ -254,6 +271,7 @@ def create_app(config, admin_key, inference_key, state_dir):
         redoc_url=None,
     )
     app.state.manager = manager
+    app.state.admission = admission
     app.state.auxiliary = auxiliary
     app.state.maintenance = maintenance
     app.state.refresh_maintenance = refresh_maintenance
@@ -399,16 +417,129 @@ def create_app(config, admin_key, inference_key, state_dir):
         )
         return response
 
-    app.add_middleware(InferenceLifetime, manager=manager)
+    app.add_middleware(InferenceLifetime, manager=manager, admission=admission)
+
+    def operator(request):
+        """Who acted: the signed-in browser session, or the control key."""
+        session = getattr(request.state, "browser_session", None)
+        if session is None:
+            return "control-key"
+        for name in ("id", "session_id"):
+            value = session.get(name) if isinstance(session, dict) else getattr(session, name, None)
+            if value:
+                return "browser:" + str(value)[:12]
+        return "browser"
+
+    class Reason(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        reason: StrictStr = Field(min_length=1, max_length=500)
+
+    class Paused(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        paused: bool
+
+    class ReservationOverride(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        value: StrictInt | None = Field(default=None, ge=0, le=64)
+
+    class AdmissionSettingsBody(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        settings: dict | None = None
+
+    @app.get("/api/admission")
+    async def admission_state():
+        view = admission_view(await manager.native_slots())
+        if view is None:
+            raise HTTPException(409, "No chat model is loaded")
+        return view
+
+    @app.get("/api/admission/events")
+    async def admission_events(after: int | None = None, limit: int = 200):
+        return admission.events_after(after, limit)
+
+    @app.post("/api/admission/pause")
+    async def admission_pause(payload: Paused, request: Request):
+        admission.set_paused(payload.paused, operator(request))
+        return admission_view(await manager.native_slots())
+
+    @app.post("/api/admission/reservation")
+    async def admission_reservation(payload: ReservationOverride, request: Request):
+        admission.set_override(payload.value, operator(request))
+        return admission_view(await manager.native_slots())
+
+    @app.post("/api/admission/requests/{request_id}/abort")
+    async def admission_abort(request_id: str, payload: Reason, request: Request):
+        event = admission.abort(request_id, payload.reason, operator(request))
+        if event is None:
+            raise HTTPException(404, "No such running request")
+        return {"event": event}
+
+    @app.post("/api/admission/queue/{request_id}/drop")
+    async def admission_drop(request_id: str, payload: Reason, request: Request):
+        event = admission.drop(request_id, payload.reason, operator(request))
+        if event is None:
+            raise HTTPException(404, "No such queued request")
+        return {"event": event}
+
+    @app.post("/api/admission/settings")
+    async def admission_settings(payload: AdmissionSettingsBody, request: Request):
+        view = admission_view(await manager.native_slots())
+        if view is None:
+            raise HTTPException(409, "No chat model is loaded")
+        try:
+            admission.set_settings(admission.model_key, payload.settings, operator(request))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return admission_view(await manager.native_slots())
 
     @app.get("/health")
     async def health():
         return {"status": "ok"}
 
+    def configure_admission(native_slots):
+        """Bring the broker's view of the loaded model up to date for status and settings."""
+        slots = manager.chat_slots(native_slots, len(admission.running))
+        if slots is None:
+            return None
+        spec = manager.spec()
+        admission.configure(
+            f"{manager.engine}/{manager.model}",
+            [config.get("admission"), spec.get("admission")],
+            Capacity(slots["total"], native_slots[0] if native_slots else None),
+            read_capacity,
+        )
+        return slots
+
+    def chat_slots_view(native_slots):
+        slots = manager.chat_slots(native_slots, len(admission.running))
+        if slots is not None and manager.model:
+            configure_admission(native_slots)
+            slots = {
+                **slots,
+                "reserved_interactive": admission.reserved_now(),
+                "queued": len(admission.queue),
+            }
+        return slots
+
+    def admission_view(native_slots):
+        if configure_admission(native_slots) is None:
+            return None
+        view = admission.view(lambda grant: grant.tap.live() if grant.tap else None)
+        view["model"] = admission.model_key
+        view["config_settings"] = resolve_settings(
+            config.get("admission"), manager.spec().get("admission")
+        )
+        return view
+
     @app.get("/api/status")
     async def status():
         manager.refresh_liveness()
-        native = await manager.native_busy()
+        native_slots = await manager.native_slots()
+        native = (
+            native_slots[0] > 0
+            if native_slots is not None
+            else (False if not manager.model or manager.phase == "unloaded" else None)
+        )
         request_taps = [
             (key, value["tap"]) for key, value in manager.active.items() if "tap" in value
         ]
@@ -442,6 +573,7 @@ def create_app(config, admin_key, inference_key, state_dir):
             "loaded_model": manager.model if manager.phase == "ready" else None,
             "phase": manager.phase,
             "native_busy": native,
+            "chat_slots": chat_slots_view(native_slots),
             "busy": True
             if manager.active or any(item.busy for item in auxiliary.services.values())
             else (
@@ -455,6 +587,8 @@ def create_app(config, admin_key, inference_key, state_dir):
                     "id": key,
                     "client": value["client"],
                     "elapsed_seconds": round(time.time() - value["started"], 1),
+                    "priority": value["grant"].priority if "grant" in value else None,
+                    "borrowed": value["grant"].borrowed if "grant" in value else None,
                 }
                 for key, value in manager.active.items()
             ],
@@ -465,6 +599,7 @@ def create_app(config, admin_key, inference_key, state_dir):
                 {"pid": p, "start_time": s} for p, s in manager.native_processes()
             ],
             "maintenance": maintenance_view(),
+            "admission": admission_view(native_slots),
             "generation": metrics,
         }
 
@@ -985,6 +1120,53 @@ def create_app(config, admin_key, inference_key, state_dir):
     async def chat(request: Request):
         return await proxy("/v1/chat/completions", request)
 
+    def admission_inputs(request, body):
+        """Priority class, size-class hint and requested output length for admission (D4, D6)."""
+        raw = request.headers.get("x-igm-priority")
+        priority = INTERACTIVE if raw is None else raw.strip().lower()
+        if priority not in PRIORITIES:
+            raise HTTPException(
+                400,
+                "X-IGM-Priority must be interactive or batch",
+                headers={"X-IGM-Code": "bad_priority"},
+            )
+        size = (request.headers.get("x-igm-size-class") or "").strip().upper()
+        size = size if size in SIZE_CLASSES else None
+        tokens = body.get("max_tokens")
+        if type(tokens) is not int or tokens <= 0:
+            tokens = body.get("max_completion_tokens")
+        return priority, size, tokens if type(tokens) is int and tokens > 0 else None
+
+    def check_inference_ready(request, body):
+        """Selection, model and process checks; call under the lifecycle lock without awaiting."""
+        manager.check_update()
+        selection = request.headers.get("x-igm-selection-id")
+        if selection is not None and selection != manager.selection_id:
+            raise HTTPException(409, "Selection changed; refresh status before inference")
+        if manager.phase != "ready" or body.get("model") != manager.model:
+            raise HTTPException(409, "Requested model is not loaded; select engine and model first")
+        if manager.process is None or manager.process.poll() is not None:
+            manager.phase = "error"
+            raise HTTPException(503, "Backend exited; reload using control API")
+        return manager.spec()
+
+    async def read_capacity():
+        native = await manager.native_slots()
+        slots = manager.chat_slots(native)
+        if slots is None:
+            raise RuntimeError("no loaded chat model")
+        return Capacity(slots["total"], native[0] if native else None)
+
+    def aborted_event(reason):
+        payload = {
+            "error": {
+                "message": f"Aborted by the operator: {reason}",
+                "type": "aborted_by_operator",
+                "code": "aborted_by_operator",
+            }
+        }
+        return b"data: " + json.dumps(payload).encode() + b"\n\n"
+
     async def proxy(path, request):
         data = bytearray()
         async for chunk in request.stream():
@@ -1001,83 +1183,138 @@ def create_app(config, admin_key, inference_key, state_dir):
         request_id = request.scope["igm_request_id"]
         if manager.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation in progress; retry when ready")
+        priority, size_class, body_tokens = admission_inputs(request, body)
+        client_name = request.headers.get("x-client-name", "unnamed")[:80]
+        # Poll the engine before the lifecycle lock: the critical sections below never await,
+        # so no other request can see this one as a lifecycle operation.
+        native = await manager.native_slots()
         async with manager.lock:
-            manager.check_update()
-            selection = request.headers.get("x-igm-selection-id")
-            if selection is not None and selection != manager.selection_id:
-                raise HTTPException(409, "Selection changed; refresh status before inference")
-            if manager.phase != "ready" or body.get("model") != manager.model:
-                raise HTTPException(
-                    409, "Requested model is not loaded; select engine and model first"
-                )
-            if manager.process is None or manager.process.poll() is not None:
-                manager.phase = "error"
-                raise HTTPException(503, "Backend exited; reload using control API")
-            spec = manager.spec()
-            native = await manager.native_busy()
-            if manager.active or native is True:
-                raise HTTPException(409, "Engine already processing; retry when idle")
-            if native is None and spec.get("probe", "slots") == "slots":
+            spec = check_inference_ready(request, body)
+            slots = manager.chat_slots(native, len(admission.running))
+            if slots is None:
+                raise HTTPException(503, "Backend not ready; retry when ready")
+            if spec.get("probe", "slots") == "slots" and native is None:
                 raise HTTPException(503, "Native occupancy unknown; inference refused")
-            apply_reasoning(
-                body, path, spec, (manager.active_settings or {}).get("reasoning", "auto")
+            admission.configure(
+                f"{manager.engine}/{manager.model}",
+                [config.get("admission"), spec.get("admission")],
+                Capacity(slots["total"], native[0] if native else None),
+                read_capacity,
             )
-            apply_system_prompt(
-                body, path, (manager.active_settings or {}).get("system_prompt", "")
-            )
-            body["model"] = spec.get("upstream_model", manager.model)
-            manager.active[request_id] = {
-                "started": time.time(),
-                "client": request.headers.get("x-client-name", "unnamed")[:80],
-                "task": request.scope["igm_response_task"],
-            }
-        upstream = None
-        tap = Tap()
-        client_name = manager.active[request_id]["client"]
-        manager.active[request_id]["tap"] = tap
+            selection_id = manager.selection_id
         try:
+            grant = await admission.acquire(
+                request_id, priority, client_name, body_tokens, size_class
+            )
+        except AdmissionRefused as refusal:
+            raise HTTPException(refusal.status, refusal.detail, headers=refusal.headers()) from None
+        tap = Tap()
+        upstream = None
+        try:
+            if manager.lifecycle_busy:
+                raise HTTPException(409, "Lifecycle operation in progress; retry when ready")
+            async with manager.lock:
+                spec = check_inference_ready(request, body)
+                if manager.selection_id != selection_id:
+                    raise HTTPException(409, "Selection changed; refresh status before inference")
+                apply_reasoning(
+                    body, path, spec, (manager.active_settings or {}).get("reasoning", "auto")
+                )
+                apply_system_prompt(
+                    body, path, (manager.active_settings or {}).get("system_prompt", "")
+                )
+                body["model"] = spec.get("upstream_model", manager.model)
+                manager.active[request_id] = {
+                    "started": time.time(),
+                    "client": client_name,
+                    "task": request.scope["igm_response_task"],
+                    "grant": grant,
+                    "tap": tap,
+                }
+            grant.tap = tap
             req = manager.http.build_request(
                 "POST", spec["base_url"] + path, json=body, headers={"Accept-Encoding": "identity"}
             )
-            upstream = await manager.http.send(req, stream=True)
+            sending = asyncio.ensure_future(manager.http.send(req, stream=True))
+            aborting = asyncio.ensure_future(grant.abort_event.wait())
+            try:
+                await asyncio.wait({sending, aborting}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                aborting.cancel()
+                if not sending.done():
+                    sending.cancel()
+                    await asyncio.gather(sending, return_exceptions=True)
+            if grant.aborted:
+                if sending.done() and not sending.cancelled() and sending.exception() is None:
+                    await sending.result().aclose()
+                raise HTTPException(
+                    499,
+                    f"Aborted by the operator: {grant.abort_reason}",
+                    headers={"X-IGM-Code": "aborted_by_operator"},
+                )
+            upstream = sending.result()
         except (ValueError, RecursionError):
             manager.active.pop(request_id, None)
+            admission.release(grant)
             raise HTTPException(400, "Invalid JSON payload") from None
         except httpx.HTTPError:
             manager.active.pop(request_id, None)
+            admission.release(grant)
             raise HTTPException(502, "Backend request failed") from None
         except BaseException:
             manager.active.pop(request_id, None)
+            admission.release(grant)
             raise
         tap.configure(upstream.headers.get("content-type"))
         model_name = manager.model
 
         async def stream():
             outcome = "cancelled"
+            chunks = upstream.aiter_raw().__aiter__()
+            aborting = asyncio.ensure_future(grant.abort_event.wait())
             try:
-                async for chunk in upstream.aiter_raw():
+                while True:
+                    pending = asyncio.ensure_future(chunks.__anext__())
+                    await asyncio.wait({pending, aborting}, return_when=asyncio.FIRST_COMPLETED)
+                    if not pending.done():
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+                        outcome = "aborted"
+                        yield aborted_event(grant.abort_reason)
+                        return
+                    try:
+                        chunk = pending.result()
+                    except StopAsyncIteration:
+                        outcome = "complete"
+                        return
                     tap.feed(chunk)
                     yield chunk
-                outcome = "complete"
             except Exception:
                 outcome = "error"
                 raise
             finally:
+                aborting.cancel()
                 await upstream.aclose()
+                tokens = None
                 try:
-                    generation.record(
-                        tap.summary(
-                            upstream.status_code, outcome, model=model_name, client=client_name
-                        )
+                    summary = tap.summary(
+                        upstream.status_code, outcome, model=model_name, client=client_name
                     )
+                    generation.record(summary)
+                    tokens = ((summary or {}).get("generation") or {}).get("tokens")
                 except Exception:
                     pass
+                admission.release(grant, tokens)
 
+        headers = {"X-Request-ID": request_id, "X-Accel-Buffering": "no"}
+        headers["X-IGM-Priority"] = grant.priority
+        if grant.waited_ms:
+            headers["X-IGM-Queue-Wait-Ms"] = str(grant.waited_ms)
         return StreamingResponse(
             stream(),
             status_code=upstream.status_code,
             media_type=upstream.headers.get("content-type", "application/json"),
-            headers={"X-Request-ID": request_id, "X-Accel-Buffering": "no"},
+            headers=headers,
         )
 
     return app

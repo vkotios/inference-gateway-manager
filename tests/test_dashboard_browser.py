@@ -614,3 +614,178 @@ async def test_auxiliary_services_have_independent_controls(browser_page, live_g
     await expect(embeddings.get_by_text("Disabled", exact=True)).to_be_visible()
     await transcription.get_by_role("button", name="Disable", exact=True).click()
     await expect(transcription.get_by_text("Disabled", exact=True)).to_be_visible()
+
+
+def admission_view(**changes):
+    view = {
+        "model": "one/fixture",
+        "mode": "queued",
+        "configured_mode": "auto",
+        "slots_total": 3,
+        "reserved_now": 1,
+        "reservation_override": None,
+        "paused_batch": False,
+        "settings": {
+            "mode": "auto",
+            "reservedInteractive": 0,
+            "maxQueue": 32,
+            "interactiveTimeoutS": 120,
+            "batchTimeoutS": 900,
+            "borrowShortTokens": 512,
+            "sizeClassExpectedTokens": {"XS": 256, "S": 1024, "M": 4096},
+        },
+        "running": [
+            {
+                "id": "r1",
+                "client": "orch/run-42",
+                "priority": "batch",
+                "borrowed": False,
+                "elapsed_seconds": 12.3,
+                "waited_ms": 0,
+                "expected_tokens": 300,
+                "expected_source": "history",
+                "tokens": 150,
+                "aborting": False,
+            },
+            {
+                "id": "r2",
+                "client": "<img src=x onerror=window.pwned=1>",
+                "priority": "interactive",
+                "borrowed": False,
+                "elapsed_seconds": 1.0,
+                "waited_ms": 0,
+                "expected_tokens": None,
+                "expected_source": "unknown",
+                "tokens": None,
+                "aborting": False,
+            },
+        ],
+        "queue": [
+            {
+                "id": "q1",
+                "client": "orch/run-43",
+                "priority": "batch",
+                "waited_seconds": 30.0,
+                "expected_tokens": 2000,
+                "expected_source": "size_class",
+                "short": False,
+            }
+        ],
+        "counters": {
+            "interactive": {
+                "admitted": 5,
+                "waited": 1,
+                "timeouts": 0,
+                "queue_full": 0,
+                "dropped": 0,
+            },
+            "batch": {"admitted": 9, "waited": 4, "timeouts": 1, "queue_full": 0, "dropped": 0},
+        },
+        "aborted": 0,
+        "wait_ms": {"interactive": {"last": 40, "p95": 40}, "batch": {"last": 61200, "p95": 61200}},
+        "boot_id": "boot",
+        "event_cursor": 0,
+        "state_error": None,
+    }
+    view.update(changes)
+    return view
+
+
+async def test_admission_panel_shows_slots_queue_and_asks_for_a_reason_before_abort_or_drop(
+    browser_page, live_gateway
+):
+    page = browser_page
+    api = await mocked_dashboard(page, live_gateway[0])
+    api.state["admission"] = admission_view()
+    calls = []
+
+    async def admission(route):
+        calls.append(
+            (route.request.url.split("/api/admission", 1)[1], route.request.post_data_json)
+        )
+        await route.fulfill(content_type="application/json", body="{}")
+
+    await page.route("**/api/admission/**", admission)
+    await login(page)
+    await expect(page.locator("#admission-badge")).to_have_text("QUEUING")
+    await expect(page.locator("#admission-summary")).to_contain_text("3 chat slots")
+    await expect(page.locator("#admission-slots")).to_contain_text("orch/run-42 · batch")
+    await expect(page.locator("#admission-queue")).to_contain_text("1. orch/run-43 · batch")
+    await expect(page.locator("#admission-counters")).to_contain_text(
+        "Started: 5 interactive, 9 batch"
+    )
+    # Client names are text, never markup.
+    assert await page.locator("#admission-slots img").count() == 0
+    assert await page.evaluate("window.pwned === undefined")
+    # Abort needs a reason; Cancel is focused first; Escape changes nothing.
+    await page.get_by_role("button", name="Abort…").first.click()
+    await expect(page.locator("#confirm-cancel")).to_be_focused()
+    await expect(page.locator("#confirm-accept")).to_be_disabled()
+    await page.keyboard.press("Escape")
+    await expect(page.locator("#confirm-dialog")).not_to_be_visible()
+    assert calls == []
+    await page.get_by_role("button", name="Abort…").first.click()
+    await page.locator("#confirm-reason").fill("wrong model for this task")
+    await page.locator("#confirm-accept").click()
+    await expect(page.locator("#admission-status")).to_contain_text("Request aborted")
+    assert calls == [("/requests/r1/abort", {"reason": "wrong model for this task"})]
+    await page.get_by_role("button", name="Drop…").click()
+    await page.locator("#confirm-reason").fill("stale")
+    await page.locator("#confirm-accept").click()
+    await expect(page.locator("#admission-status")).to_contain_text("Request dropped")
+    assert calls[-1] == ("/queue/q1/drop", {"reason": "stale"})
+    # Reservation and batch controls.
+    await page.get_by_role("button", name="Pause batch").click()
+    assert calls[-1] == ("/pause", {"paused": True})
+    await page.get_by_role("button", name="Reserve a slot today").click()
+    assert calls[-1] == ("/reservation", {"value": 1})
+    await page.get_by_role("button", name="Release reservation today").click()
+    assert calls[-1] == ("/reservation", {"value": 0})
+    # The other confirmations still work without a reason field.
+    await page.set_viewport_size({"width": 390, "height": 844})
+    assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+async def test_admission_settings_form_builds_a_calendar_and_keeps_edits_across_polls(
+    browser_page, live_gateway
+):
+    page = browser_page
+    api = await mocked_dashboard(page, live_gateway[0])
+    api.state["admission"] = admission_view()
+    saved = []
+
+    async def admission(route):
+        saved.append(route.request.post_data_json)
+        await route.fulfill(content_type="application/json", body="{}")
+
+    await page.route("**/api/admission/settings", admission)
+    await login(page)
+    await page.get_by_text("Admission settings", exact=True).click()
+    await expect(page.locator("#adm-maxq")).to_have_value("32")
+    await page.locator("#adm-reserved-day").fill("1")
+    await page.locator("#adm-tz").fill("Europe/Athens")
+    await page.evaluate("poll()")  # a background poll must not overwrite the edit
+    await expect(page.locator("#adm-reserved-day")).to_have_value("1")
+    await page.get_by_role("button", name="Save settings").click()
+    await expect(page.locator("#admission-status")).to_contain_text("settings saved")
+    settings = saved[-1]["settings"]
+    assert settings["reservedInteractive"] == {
+        "default": 0,
+        "windows": [
+            {
+                "days": ["mon", "tue", "wed", "thu", "fri"],
+                "start": "08:00",
+                "end": "20:00",
+                "reserved": 1,
+            }
+        ],
+        "timezone": "Europe/Athens",
+    }
+    assert settings["maxQueue"] == 32 and settings["mode"] == "auto"
+    await page.locator("#adm-maxq").fill("")
+    await page.get_by_role("button", name="Save settings").click()
+    await expect(page.locator("#admission-status")).to_contain_text("must be a whole number")
+    await page.get_by_role("button", name="Use configured settings").click()
+    await page.locator("#confirm-accept").click()
+    await expect(page.locator("#admission-status")).to_contain_text("Using the configured")
+    assert saved[-1] == {"settings": None}
