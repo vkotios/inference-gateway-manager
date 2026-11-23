@@ -304,6 +304,8 @@ def validate_runtime(spec):
         raise ValueError("Model argv must be a nonempty string array")
     if spec.get("probe", "slots") not in ("slots", "gateway_only"):
         raise ValueError("Unknown occupancy probe")
+    if type(spec.get("chat_slots", 1)) is not int or spec.get("chat_slots", 1) < 1:
+        raise ValueError("chat_slots must be a positive integer")
     if not isinstance(spec.get("ready_path", "/health"), str) or not spec.get(
         "ready_path", "/health"
     ).startswith("/"):

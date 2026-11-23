@@ -408,7 +408,12 @@ def create_app(config, admin_key, inference_key, state_dir):
     @app.get("/api/status")
     async def status():
         manager.refresh_liveness()
-        native = await manager.native_busy()
+        native_slots = await manager.native_slots()
+        native = (
+            native_slots[0] > 0
+            if native_slots is not None
+            else (False if not manager.model or manager.phase == "unloaded" else None)
+        )
         request_taps = [
             (key, value["tap"]) for key, value in manager.active.items() if "tap" in value
         ]
@@ -442,6 +447,7 @@ def create_app(config, admin_key, inference_key, state_dir):
             "loaded_model": manager.model if manager.phase == "ready" else None,
             "phase": manager.phase,
             "native_busy": native,
+            "chat_slots": manager.chat_slots(native_slots),
             "busy": True
             if manager.active or any(item.busy for item in auxiliary.services.values())
             else (
@@ -1014,11 +1020,15 @@ def create_app(config, admin_key, inference_key, state_dir):
                 manager.phase = "error"
                 raise HTTPException(503, "Backend exited; reload using control API")
             spec = manager.spec()
-            native = await manager.native_busy()
-            if manager.active or native is True:
-                raise HTTPException(409, "Engine already processing; retry when idle")
-            if native is None and spec.get("probe", "slots") == "slots":
+            slots = manager.chat_slots(await manager.native_slots())
+            if slots is None:
+                raise HTTPException(503, "Backend not ready; retry when ready")
+            if slots["available"] is None:
                 raise HTTPException(503, "Native occupancy unknown; inference refused")
+            if slots["available"] == 0:
+                raise HTTPException(
+                    409, "Engine already processing; retry when a chat slot is free"
+                )
             apply_reasoning(
                 body, path, spec, (manager.active_settings or {}).get("reasoning", "auto")
             )

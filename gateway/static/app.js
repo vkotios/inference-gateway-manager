@@ -345,7 +345,12 @@ async function poll() {
     state = s; recovery = r; $("connection").textContent = "CONNECTED"; $("phase").textContent = s.phase.toUpperCase();
     $("loaded").textContent = s.loaded_model ? `${s.selected_engine} / ${s.loaded_model}` : "No model loaded";
     const active = s.active_settings;
-    $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
+    const slots = s.chat_slots;
+    let slotText = "";
+    if (slots) slotText = slots.available == null
+      ? ` · Chat slot availability unknown (limit ${slots.total})`
+      : ` · Chat slots: ${slots.available}/${slots.total} available`;
+    $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}${slotText}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
     $("busy").textContent = s.busy === true ? "Processing" : s.busy === false ? "Idle" : "Unknown";
     $("activity").textContent = s.active_requests + " active gateway request(s)";
     $("generation").textContent = describeGeneration(s.generation);
