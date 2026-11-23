@@ -85,6 +85,8 @@ class Manager:
         self.launch_id = None
         # Set by the API layer when a maintenance lease directory is configured.
         self.lease_guard = None
+        # Set by the API layer: queued chat requests are refused when the loaded model goes away.
+        self.drain_queue = None
         self.auxiliary = None
         self.tracker = None  # footprint recorder, set by the API layer
         self.update_blocked = False
@@ -223,12 +225,13 @@ class Manager:
         slots = await self.native_slots()
         return slots[0] > 0 if slots is not None else None
 
-    def chat_slots(self, native):
+    def chat_slots(self, native, admitted=0):
+        """Capacity of the loaded model. ``admitted`` counts requests the broker has started."""
         if not self.model or self.phase != "ready":
             return None
         spec = self.spec()
         limit = spec.get("chat_slots", 1)
-        used = len(self.active)
+        used = max(len(self.active), admitted)
         if spec.get("probe", "slots") == "slots":
             if native is None:
                 return {"total": limit, "available": 0 if used >= limit else None}
@@ -250,7 +253,12 @@ class Manager:
         if self.auxiliary is not None:
             self.auxiliary.kick()
 
+    def drain(self):
+        if self.drain_queue is not None:
+            self.drain_queue()
+
     def reset_loaded(self):
+        self.drain()
         if self.tracker is not None:
             self.tracker.finish()
         if self.launch_config_path is not None:
@@ -312,6 +320,7 @@ class Manager:
             raise HTTPException(
                 409, "Engine busy or native occupancy unknown; retry or explicitly force"
             )
+        self.drain()
         self.phase = "stopping"
         if force:
             await self.clear_requests()
