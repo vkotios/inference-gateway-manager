@@ -490,6 +490,14 @@ def adjustable_slots_spec(tmp_path, **extra):
     return spec
 
 
+def test_slots_x_context_is_a_context_binding(tmp_path):
+    from gateway.settings import validate_capabilities
+
+    spec = adjustable_slots_spec(tmp_path)
+    spec["argv"] = [arg for arg in spec["argv"] if "{context}" not in arg]
+    validate_capabilities(spec)
+
+
 def test_slot_limits_default_to_fixed_at_chat_slots_and_appear_in_the_summary(tmp_path):
     from gateway.settings import capabilities, summary
 
@@ -594,7 +602,24 @@ def test_a_model_without_adjustable_slots_accepts_only_its_own_count(tmp_path):
     assert refused.value.status_code == 422
 
 
-def slots_app(tmp_path, native_slots=4, **extra):
+def record_slots(manager, slots, context, need):
+    from gateway.footprints import CHAT, Footprint, chat_fingerprint
+
+    _, spec, _ = manager.prepare_model("fixture", "one", context, slots=slots)
+    return manager.tracker.store.record(
+        Footprint(
+            CHAT,
+            "one/fixture",
+            need // 2,
+            need,
+            context=context,
+            fingerprint=chat_fingerprint("one", "fixture", spec),
+            note=f"slots={slots}",
+        )
+    )
+
+
+def slots_app(tmp_path, native_slots=4, *, measured=True, **extra):
     import json
 
     cfg = settings_config(tmp_path)
@@ -607,7 +632,14 @@ def slots_app(tmp_path, native_slots=4, **extra):
             [{"id": i, "is_processing": False, "n_ctx": 262144} for i in range(native_slots)]
         )
     )
-    return create_app(cfg, "a" * 32, "b" * 32, tmp_path)
+    app = create_app(cfg, "a" * 32, "b" * 32, tmp_path)
+    manager = app.state.manager
+    manager.auxiliary.sample_total = lambda: 256 * 1024**3
+    manager.sample_available = lambda: 128 * 1024**3
+    if measured:
+        for count in range(2, 5):
+            record_slots(manager, count, 262144, 64 * 1024**2)
+    return app
 
 
 def admin(app):
@@ -761,40 +793,27 @@ async def test_prepare_model_inherits_the_selected_slots_on_a_context_change(tmp
 async def test_footprint_view_stays_at_the_default_slots_and_shows_a_record_per_slot_count(
     tmp_path,
 ):
-    from gateway.footprints import CHAT, Footprint, chat_fingerprint
-
-    app = slots_app(tmp_path)
+    app = slots_app(tmp_path, measured=False)
     manager = app.state.manager
     try:
         async with admin(app) as client:
-            await client.post("/api/model", json={"engine": "one", "model": "fixture", "slots": 3})
             view = (await client.get("/api/footprints")).json()
             entry = next(c for c in view["compatibility"] if c["model"] == "fixture")
             # the list is always at the model's own count, whatever is loaded now
             assert entry["slots"] == 1 and entry["calibrated"] is False
             assert sorted(entry["by_slots"]) == ["1", "2", "3", "4"]
-            assert not any(v["calibrated"] for v in entry["by_slots"].values())
+            assert not any(entry["by_slots"].values())
             # a measurement at 2 slots covers 2 slots and nothing else
-            _e, spec, settings = manager.prepare_model("fixture", "one", 262144, slots=2)
-            manager.tracker.store.record(
-                Footprint(
-                    CHAT,
-                    "one/fixture",
-                    40 * 1024**3,
-                    41 * 1024**3,
-                    0,
-                    settings["context"],
-                    chat_fingerprint("one", "fixture", spec),
-                    "measured",
-                    1.0,
-                    "slots=2",
-                )
+            record_slots(manager, 2, 262144, 41 * 1024**3)
+            loaded = await client.post(
+                "/api/model", json={"engine": "one", "model": "fixture", "slots": 2}
             )
+            assert loaded.status_code == 200, loaded.text
             view = (await client.get("/api/footprints")).json()
             entry = next(c for c in view["compatibility"] if c["model"] == "fixture")
             assert entry["calibrated"] is False
-            assert [k for k, v in entry["by_slots"].items() if v["calibrated"]] == ["2"]
-            assert entry["by_slots"]["2"]["source"] == "measured"
+            assert [k for k, records in entry["by_slots"].items() if records] == ["2"]
+            assert entry["by_slots"]["2"] == [{"context": 262144, "needs_bytes": 41 * 1024**3}]
     finally:
         await manager.close()
 

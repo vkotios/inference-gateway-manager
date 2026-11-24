@@ -166,6 +166,9 @@ class FootprintStore:
         )
         return candidates[0]
 
+    def measured_at(self, kind, key, fingerprint, context):
+        return self.records.get((kind, key, fingerprint, context, "measured"))
+
     def record(self, footprint):
         """Store a measurement; the same launch and context keep their highest peaks."""
         if not _valid(footprint):

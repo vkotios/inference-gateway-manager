@@ -44,6 +44,7 @@ from .memory_admission import effective_available_memory
 from .metrics import Metrics, Tap
 from .registry import Registry
 from .settings import apply_reasoning, apply_system_prompt, summary
+from .slot_fit import slot_profile
 from .supervision import watchdog
 from .telemetry import telemetry
 from .updates import Updates
@@ -127,6 +128,7 @@ class FootprintCalibrate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     engine: StrictStr
     model: StrictStr
+    slots: bool = False
 
 
 class InferenceLifetime:
@@ -169,6 +171,7 @@ def create_app(config, admin_key, inference_key, state_dir):
         interval=footprint_options.get("interval_seconds", 5.0),
         settle_seconds=footprint_options.get("settle_seconds", 30.0),
     )
+    manager.sample_available = lambda: effective_available_memory()
     updates = Updates(config, Path(state_dir))
     generation = Metrics()
     admission = Admission(manager.state_dir / "admission-state.json")
@@ -851,30 +854,19 @@ def create_app(config, admin_key, inference_key, state_dir):
                 }
                 slot_limits = model_cfg.get("slot_limits", {})
                 if slot_limits.get("adjustable"):
-                    # Whether each selectable slot count has a record, at the same (maximum) context.
-                    by_slots = {}
-                    for count in slot_limits.get("presets", []):
-                        try:
-                            _e, count_spec, count_settings = manager.prepare_model(
-                                model_id,
-                                engine_id,
-                                limits.get("max") or model_cfg.get("context"),
-                                slots=count,
-                            )
-                        except (HTTPException, ValueError, KeyError, TypeError):
-                            continue
-                        found = store.lookup(
-                            "chat",
-                            key,
-                            chat_fingerprint(engine_id, model_id, count_spec),
-                            count_settings.get("context"),
-                        )
-                        by_slots[str(count)] = {
-                            "calibrated": found is not None,
-                            "source": found.source if found else None,
-                            "needs_bytes": found.needs_bytes if found else None,
-                        }
-                    entry["by_slots"] = by_slots
+                    entry["by_slots"], entry["fit"] = slot_profile(manager, engine_id, model_id)
+                    entry["can_calibrate_slots"] = bool(
+                        limits.get("adjustable") and limits["min"] < limits["max"]
+                    )
+                    template = json.dumps(spec.get("_config_template", {}))
+                    entry["services_need_exact_context"] = any(
+                        token in template for token in ("{context}", "{slots_x_context}")
+                    )
+                    entry["service_seeds"] = [
+                        {"context": seed.context, "needs_bytes": seed.needs_bytes}
+                        for seed in sorted(store.seeds, key=lambda seed: seed.context or 0)
+                        if seed.kind == "chat" and seed.key == key
+                    ]
                 compatibility.append(entry)
         for name, service in auxiliary.services.items():
             for model_id in service.models:
@@ -887,6 +879,12 @@ def create_app(config, admin_key, inference_key, state_dir):
             "records": store.listing(fingerprints),
             "loaded": manager.tracker.snapshot() if manager.tracker else None,
             "compatibility": compatibility,
+            "loaded_services": len(live),
+            "loaded_services_bytes": (
+                sum(record.needs_bytes for _, _, record in loaded_entries)
+                if all(record is not None for _, _, record in loaded_entries)
+                else None
+            ),
             "memory": {
                 "total_bytes": auxiliary.total_memory(),
                 "available_bytes": available,
@@ -929,59 +927,47 @@ def create_app(config, admin_key, inference_key, state_dir):
             raise HTTPException(404, "Unknown or disabled model for engine")
         limits = model_cfg.get("context_limits", {})
         context = limits.get("max") or model_cfg.get("context")
-        abort_below = footprint_options.get("abort_below_available_bytes", 1024**3)
-        tracker = manager.tracker
-        aborted = {}
-
-        async def guard():
-            while True:
-                await asyncio.sleep(1)
-                try:
-                    available = await asyncio.to_thread(effective_available_memory)
-                except (OSError, ValueError):
-                    continue
-                if available < abort_below:
-                    aborted["available"] = available
-                    await manager.unload(True)
-                    return
-
-        watcher = asyncio.create_task(guard())
-        try:
-            try:
-                await manager.load_model(
-                    payload.model,
-                    False,
-                    engine=payload.engine,
-                    context=context,
-                    slots=model_cfg.get("chat_slots", 1),
-                )
-                if not aborted:
-                    await asyncio.sleep(tracker.settle_seconds + tracker.interval + 1)
-            except (OSError, RuntimeError, TimeoutError):
-                raise HTTPException(
-                    503, "Backend startup failed; inspect local engine log"
-                ) from None
-            except HTTPException:
-                if aborted:
-                    raise HTTPException(
-                        503,
-                        f"Calibration aborted: available memory fell to "
-                        f"{aborted['available'] >> 20} MiB; the engine was unloaded",
-                    ) from None
-                raise
-        finally:
-            watcher.cancel()
-            await asyncio.gather(watcher, return_exceptions=True)
-            await refresh_maintenance()
-        if aborted:
-            raise HTTPException(
-                503,
-                f"Calibration aborted: available memory fell to {aborted['available'] >> 20} MiB",
+        contexts = [context]
+        if payload.slots:
+            if not model_cfg.get("slot_limits", {}).get("adjustable"):
+                raise HTTPException(409, "This model has fixed slots")
+            if not limits.get("adjustable") or limits["min"] == context:
+                raise HTTPException(409, "Calibrating slots requires two supported contexts")
+            presets = [value for value in limits["presets"] if value < context]
+            contexts.append(
+                min(presets or [limits["min"]], key=lambda c: (abs(4 * c - context), c))
             )
-        record = tracker.record_now("calibrated at maximum context")
-        if record is None:
-            raise HTTPException(409, "No memory samples were taken; nothing recorded")
-        return {"context": context, "record": record.public()}
+
+        records = []
+        try:
+            for index, target in enumerate(contexts):
+                record = await manager.load_model(
+                    payload.model,
+                    engine=payload.engine,
+                    context=target,
+                    slots=model_cfg.get("chat_slots", 1),
+                    calibration=(
+                        "calibrated at reduced context"
+                        if index
+                        else "calibrated at maximum context"
+                    ),
+                    reload_for_calibration=payload.slots,
+                )
+                if record is None:
+                    raise HTTPException(409, "No memory samples were taken; nothing recorded")
+                records.append(
+                    {**record.public(), "needs_bytes": record.needs_bytes}
+                    if payload.slots
+                    else record.public()
+                )
+        except (OSError, RuntimeError, TimeoutError):
+            raise HTTPException(503, "Backend startup failed; inspect local engine log") from None
+        finally:
+            await refresh_maintenance()
+        if payload.slots:
+            _, fit = slot_profile(manager, payload.engine, payload.model)
+            return {"context": contexts[-1], "records": records, "fit": fit}
+        return {"context": context, "record": records[0]}
 
     @app.get("/v1/models")
     async def models():

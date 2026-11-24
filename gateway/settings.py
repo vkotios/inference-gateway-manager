@@ -104,12 +104,13 @@ def validate_capabilities(spec):
             raise ValueError("Invalid context presets")
         if not limits["adjustable"] and (lower != context or upper != context):
             raise ValueError("Fixed context limits must match the default")
-        if (
-            limits["adjustable"]
-            and not any("{context}" in arg for arg in spec.get("argv", []))
-            and "{context}" not in json.dumps(spec.get("config_template", {}))
-        ):
-            raise ValueError("Adjustable context requires an administrator {context} argv binding")
+        if limits["adjustable"]:
+            bindings = json.dumps([spec.get("argv", []), spec.get("config_template", {})])
+            if "{context}" not in bindings and "{slots_x_context}" not in bindings:
+                raise ValueError(
+                    "Adjustable context requires an administrator {context} or "
+                    "{slots_x_context} binding"
+                )
     validate_slot_limits(spec, caps["slot_limits"])
     modes, change = caps["reasoning_modes"], caps["reasoning_change"]
     if (

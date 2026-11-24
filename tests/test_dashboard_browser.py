@@ -805,7 +805,12 @@ async def test_slots_select_follows_slot_limits_and_is_sent_with_the_load(
             "context": 4096,
             "chat_slots": 1,
             "enabled": True,
-            "context_limits": {"min": 512, "max": 8192, "presets": [4096], "adjustable": True},
+            "context_limits": {
+                "min": 512,
+                "max": 8192,
+                "presets": [4096, 8192],
+                "adjustable": True,
+            },
             "slot_limits": {"min": 1, "max": 4, "presets": [1, 2, 4], "adjustable": True},
             "reasoning_modes": ["auto"],
             "reasoning_change": "fixed",
@@ -826,10 +831,14 @@ async def test_slots_select_follows_slot_limits_and_is_sent_with_the_load(
                 "source": "measured",
                 "needs_bytes": 30 * gib,
                 "fits_with_loaded_services": None,
-                "by_slots": {
-                    "1": {"calibrated": True, "source": "measured", "needs_bytes": 30 * gib},
-                    "2": {"calibrated": False, "source": None, "needs_bytes": None},
-                    "4": {"calibrated": True, "source": "measured", "needs_bytes": 90 * gib},
+                "can_calibrate_slots": True,
+                "by_slots": {"1": [{"context": 4096, "needs_bytes": 28 * gib}]},
+                "fit": {
+                    "a": 20 * gib,
+                    "k": 2 * gib / 1024,
+                    "margin": 2 * gib,
+                    "points": 2,
+                    "budget": 58 * gib,
                 },
             }
         ],
@@ -842,16 +851,30 @@ async def test_slots_select_follows_slot_limits_and_is_sent_with_the_load(
     await page.get_by_role("button", name="Load model", exact=True).click()
     await expect(page.locator("#notice")).to_have_text("Lifecycle action completed.")
     assert "slots" not in [r for r in api.requests if r[1] == "model"][-1][2]
-    # an adjustable one shows the presets, defaults to its own count and reports what is measured
+    # The full range is shown, including the count omitted from presets.
     await page.locator("#model").select_option("slotted")
     await expect(page.locator("#slots-field")).to_be_visible()
-    assert await slots.locator("option").evaluate_all("o => o.map(x => x.value)") == ["1", "2", "4"]
+    assert await slots.locator("option").evaluate_all("o => o.map(x => x.value)") == [
+        "1",
+        "2",
+        "3",
+        "4",
+    ]
     await expect(slots).to_have_value("1")
-    await expect(page.locator("#model-footprint")).to_contain_text("30.0 GiB measured")
-    await slots.select_option("2")
-    await expect(page.locator("#model-footprint")).to_contain_text("Not measured at 2 slots")
+    await expect(page.locator("#model-footprint")).to_have_text("28.0 GiB · measured")
+    four = slots.locator("option[value='4']")
+    await expect(four).to_be_enabled()
+    await page.locator("#context").select_option("8192")
+    await expect(four).to_be_disabled()
+    await expect(four).to_have_text("4 slots: needs ~86.0 GiB, budget 58.0 GiB")
+    await page.locator("#context").select_option("custom")
+    await page.locator("#custom-context").fill("4096")
+    await expect(four).to_be_enabled()
     await slots.select_option("4")
-    await expect(page.locator("#model-footprint")).to_contain_text("measured at 4 slots")
+    await expect(page.locator("#model-footprint")).to_have_text(
+        "54.0 GiB · estimated from 2 measurements"
+    )
+    await expect(page.get_by_role("button", name="Calibrate slots for one/slotted")).to_be_enabled()
     await page.get_by_role("button", name="Load model", exact=True).click()
     await expect(page.locator("#notice")).to_have_text("Lifecycle action completed.")
     sent = [r for r in api.requests if r[1] == "model"][-1][2]
@@ -862,3 +885,25 @@ async def test_slots_select_follows_slot_limits_and_is_sent_with_the_load(
     )
     await page.evaluate("poll()")
     await expect(page.locator("#active-settings")).to_contain_text("Selected slots: 4")
+
+
+async def test_python_and_dashboard_use_the_same_slot_fit_cases(browser_page, live_gateway):
+    from gateway.slot_fit import fit_slots, slot_choice
+
+    page = browser_page
+    await page.goto(live_gateway[0])
+    cases = json.loads((ROOT / "tests" / "fixtures" / "slot_fit_cases.json").read_text())
+    for case in cases:
+        records = case["by_slots"]
+        fit = fit_slots(records, case["fit"]["budget"], case["floor"])
+        assert fit == case["fit"]
+        for context in case["contexts"]:
+            expected = [
+                slot_choice(records, fit, case["default"], int(count), context) for count in records
+            ]
+            actual = await page.evaluate(
+                """({by_slots, fit, default: defaultSlots, context}) => Object.keys(by_slots)
+                    .map(count => slotChoice(by_slots, fit, defaultSlots, Number(count), context))""",
+                {**case, "context": context},
+            )
+            assert actual == expected

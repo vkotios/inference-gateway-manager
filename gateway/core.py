@@ -3,11 +3,13 @@
 import asyncio
 import copy
 import json
+import logging
 import os
 import secrets
 import signal
 import subprocess
 import time
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -15,8 +17,15 @@ import httpx
 import psutil
 from fastapi import HTTPException
 
-from .footprints import chat_fingerprint
+from .footprints import CHAT, chat_fingerprint
 from .settings import select
+from .slot_fit import slot_choice, slot_profile
+
+log = logging.getLogger(__name__)
+
+
+class MemoryAbort(HTTPException):
+    pass
 
 
 def identity(pid):
@@ -89,6 +98,8 @@ class Manager:
         self.drain_queue = None
         self.auxiliary = None
         self.tracker = None  # footprint recorder, set by the API layer
+        self.sample_available = None
+        self.memory_watch_task = None
         self.update_blocked = False
         self.update_authorized = ContextVar("igm_update_authorized", default=False)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=5), trust_env=False)
@@ -259,6 +270,9 @@ class Manager:
 
     def reset_loaded(self):
         self.drain()
+        if self.memory_watch_task is not None:
+            self.memory_watch_task.cancel()
+            self.memory_watch_task = None
         if self.tracker is not None:
             self.tracker.finish()
         if self.launch_config_path is not None:
@@ -390,10 +404,15 @@ class Manager:
         reasoning=None,
         system_prompt=None,
         slots=None,
+        calibration=None,
+        reload_for_calibration=False,
     ):
         self.check_update()
         # Invalid force requests must never cancel another in-flight load.
-        self.prepare_model(model, engine, context, reasoning, system_prompt, slots)
+        target, _, settings = self.prepare_model(
+            model, engine, context, reasoning, system_prompt, slots
+        )
+        self.check_slots(target, model, settings)
         await self.interrupt_loading(force)
         if self.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation already running")
@@ -404,6 +423,7 @@ class Manager:
             and reasoning is None
             and system_prompt is None
             and slots is None
+            and calibration is None
             else self._load_model(
                 model,
                 force,
@@ -412,6 +432,11 @@ class Manager:
                 reasoning=reasoning,
                 system_prompt=system_prompt,
                 slots=slots,
+                **(
+                    {"calibration": calibration, "reload_for_calibration": reload_for_calibration}
+                    if calibration is not None
+                    else {}
+                ),
             )
         )
         task = asyncio.create_task(operation)
@@ -470,6 +495,94 @@ class Manager:
         spec["_argv_template"] = source["argv"]
         return target_engine, spec, settings
 
+    def check_slots(self, engine, model, settings):
+        cfg = self.config["engines"][engine]["models"][model]
+        default = cfg.get("chat_slots", 1)
+        if (
+            settings["slots"] != default
+            and cfg.get("slot_limits", {}).get("adjustable")
+            and self.tracker is not None
+            and self.auxiliary is not None
+        ):
+            by_slots, fit = slot_profile(self, engine, model)
+            choice = slot_choice(by_slots, fit, default, settings["slots"], settings["context"])
+            if choice["reason"]:
+                raise HTTPException(409, choice["reason"])
+
+    @asynccontextmanager
+    async def watch_load_memory(self, enabled, calibration):
+        if not enabled:
+            yield
+            return
+        low = None
+        loop = asyncio.get_running_loop()
+        log.info("Watching available memory during chat load and settle")
+
+        async def watch():
+            nonlocal low
+            low = await self.wait_for_low_memory()
+            deadline.reschedule(loop.time())
+
+        try:
+            async with asyncio.timeout(None) as deadline:
+                watcher = asyncio.create_task(watch())
+                try:
+                    yield
+                    if low is not None:
+                        raise TimeoutError
+                finally:
+                    watcher.cancel()
+        except TimeoutError:
+            if low is None:
+                raise
+            prefix = "Calibration aborted" if calibration else "aborted"
+            detail = f"{prefix}: available memory fell to {low >> 20} MiB"
+            log.warning("%s", detail)
+            await self._stop(force=True)
+            self.last_error = detail
+            raise MemoryAbort(503, detail) from None
+
+    async def wait_for_low_memory(self):
+        threshold = self.config.get("footprints", {}).get("abort_below_available_bytes", 1024**3)
+        while True:
+            try:
+                available = await asyncio.to_thread(self.sample_available)
+                if available < threshold:
+                    return available
+            except (OSError, ValueError):
+                pass
+            await asyncio.sleep(1)
+
+    async def watch_settling_memory(self, launch_id):
+        try:
+            try:
+                async with asyncio.timeout(self.tracker.settle_seconds):
+                    available = await self.wait_for_low_memory()
+            except TimeoutError:
+                return
+            async with self.lock:
+                if self.launch_id != launch_id or self.phase != "ready":
+                    return
+                detail = f"aborted: available memory fell to {available >> 20} MiB"
+                log.warning("%s", detail)
+                # reset_loaded cancels stale watchers. This watcher owns the stop.
+                self.memory_watch_task = None
+                try:
+                    await self._stop(force=True)
+                except (HTTPException, OSError):
+                    detail += "; engine shutdown failed"
+                    log.exception("Could not unload engine after low-memory abort")
+                self.last_error = detail
+        finally:
+            if self.memory_watch_task is asyncio.current_task():
+                self.memory_watch_task = None
+
+    async def settle_footprint(self, calibration):
+        await asyncio.sleep(self.tracker.settle_seconds + self.tracker.interval + 1)
+        if self.process is None or self.process.poll() is not None:
+            raise RuntimeError("Backend exited while settling")
+        return self.tracker.record_now(calibration)
+
     async def _load_model(
         self,
         model,
@@ -480,25 +593,36 @@ class Manager:
         reasoning=None,
         system_prompt=None,
         slots=None,
+        calibration=None,
+        reload_for_calibration=False,
     ):
         async with self.lock:
             self.check_update()
             target_engine, spec, settings = self.prepare_model(
                 model, engine, context, reasoning, system_prompt, slots
             )
+            self.check_slots(target_engine, model, settings)
             same_model = target_engine == self.engine and model == self.model
             if (
                 same_model
+                and not reload_for_calibration
                 and self.phase == "ready"
                 and self.process is not None
                 and self.process.poll() is None
             ):
                 if settings == self.selected_settings:
+                    if calibration:
+                        if self.memory_watch_task is not None:
+                            self.memory_watch_task.cancel()
+                            self.memory_watch_task = None
+                        async with self.watch_load_memory(True, calibration):
+                            return await self.settle_footprint(calibration)
                     return
                 # A different context or slot count changes the launch, so it restarts the engine;
                 # reasoning and the system prompt can be applied to the running one.
                 if (
-                    settings["context"] == self.selected_settings["context"]
+                    not calibration
+                    and settings["context"] == self.selected_settings["context"]
                     and (settings.get("slots") == self.selected_settings.get("slots"))
                     and (
                         settings["reasoning"] == self.selected_settings["reasoning"]
@@ -536,94 +660,28 @@ class Manager:
             self.load_interrupted = False
             self.last_error = None
             self.launch_id = secrets.token_hex(24)
+            key = f"{target_engine}/{model}"
+            fingerprint = chat_fingerprint(target_engine, model, spec)
+            guarded = (
+                self.tracker is not None
+                and self.sample_available is not None
+                and (
+                    calibration
+                    or self.tracker.store.measured_at(CHAT, key, fingerprint, settings["context"])
+                    is None
+                )
+            )
             try:
-                if self.tracker is not None:
-                    self.tracker.begin_load(
-                        f"{target_engine}/{model}",
-                        chat_fingerprint(target_engine, model, spec),
-                        settings["context"],
-                        settings["slots"],
+                async with self.watch_load_memory(guarded, calibration):
+                    await self._start_backend(spec, settings, key, fingerprint)
+                    if calibration:
+                        return await self.settle_footprint(calibration)
+                if guarded:
+                    self.memory_watch_task = asyncio.create_task(
+                        self.watch_settling_memory(self.launch_id)
                     )
-                argv = spec["argv"]
-                if "config_template" in spec:
-                    self.launch_config_path = self.state_dir / f"launch-{self.launch_id}.json"
-                    fd = os.open(
-                        self.launch_config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-                    )
-                    with os.fdopen(fd, "w") as generated:
-                        json.dump(spec["config_template"], generated, allow_nan=False)
-                        generated.flush()
-                        os.fsync(generated.fileno())
-                    argv = [
-                        arg.replace("{config_path}", str(self.launch_config_path)) for arg in argv
-                    ]
-                with (self.state_dir / "engine.log").open("ab") as log:
-                    self.process = subprocess.Popen(
-                        [arg.replace("{launch_id}", self.launch_id) for arg in argv],
-                        cwd=spec.get("cwd"),
-                        env={
-                            **{
-                                k: v
-                                for k, v in {**os.environ, **spec.get("env", {})}.items()
-                                if not k.startswith("IGM_")
-                                and k not in {"NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID"}
-                            },
-                            "IGM_ENGINE_RUN_ID": self.launch_id,
-                        },
-                        stdin=subprocess.DEVNULL,
-                        stdout=log,
-                        stderr=log,
-                        start_new_session=True,
-                    )
-                self.capture_owned()
-                deadline = time.monotonic() + self.config.get("startup_timeout", 900)
-                warmup_deadline = None
-                healthy = False
-                while time.monotonic() < deadline:
-                    if self.process.poll() is not None:
-                        raise RuntimeError("Backend exited while loading; inspect local engine log")
-                    # Validate ownership against the exact conflict snapshot:
-                    # a launched child can appear after an earlier enumeration.
-                    native = self.native_processes()
-                    self.capture_owned(native)
-                    if any(p not in self.owned for p in native):
-                        raise RuntimeError("Unmanaged native engine appeared during startup")
-                    try:
-                        r = await self.http.get(
-                            spec["base_url"] + spec.get("ready_path", "/health"), timeout=2
-                        )
-                    except httpx.HTTPError:
-                        r = None
-                    if r is not None and r.is_success:
-                        healthy = True
-                        # Health success only proves the HTTP server is up. Native
-                        # engines run an empty-prompt warmup after that: hold the
-                        # loading phase until slots report idle so the first
-                        # admitted call is not rejected as a busy engine.
-                        if warmup_deadline is None:
-                            warmup_deadline = time.monotonic() + self.config.get(
-                                "warmup_timeout", 120
-                            )
-                        if (
-                            spec.get("probe", "slots") != "slots"
-                            or await self.native_busy() is False
-                        ):
-                            self.mark_ready()
-                            return
-                        if time.monotonic() >= warmup_deadline:
-                            # Slots never settled to a verified idle state;
-                            # admission still fail-closes on unknown occupancy.
-                            self.mark_ready()
-                            await self.native_busy()
-                            return
-                    await asyncio.sleep(0.25)
-                if healthy:
-                    # The server answered /health but the warmup hold outlasted
-                    # startup_timeout; a working engine must not fail the load.
-                    self.mark_ready()
-                    await self.native_busy()
-                    return
-                raise TimeoutError("Model startup timed out")
+            except MemoryAbort:
+                raise
             except BaseException:
                 await finish_cleanup(asyncio.create_task(self._stop(force=True)))
                 if self.load_interrupted:
@@ -634,6 +692,81 @@ class Manager:
                 raise
             finally:
                 self.loading_task = None
+
+    async def _start_backend(self, spec, settings, key, fingerprint):
+        if self.tracker is not None:
+            self.tracker.begin_load(key, fingerprint, settings["context"], settings["slots"])
+        argv = spec["argv"]
+        if "config_template" in spec:
+            self.launch_config_path = self.state_dir / f"launch-{self.launch_id}.json"
+            fd = os.open(self.launch_config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as generated:
+                json.dump(spec["config_template"], generated, allow_nan=False)
+                generated.flush()
+                os.fsync(generated.fileno())
+            argv = [arg.replace("{config_path}", str(self.launch_config_path)) for arg in argv]
+        with (self.state_dir / "engine.log").open("ab") as log:
+            self.process = subprocess.Popen(
+                [arg.replace("{launch_id}", self.launch_id) for arg in argv],
+                cwd=spec.get("cwd"),
+                env={
+                    **{
+                        k: v
+                        for k, v in {**os.environ, **spec.get("env", {})}.items()
+                        if not k.startswith("IGM_")
+                        and k not in {"NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID"}
+                    },
+                    "IGM_ENGINE_RUN_ID": self.launch_id,
+                },
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        self.capture_owned()
+        deadline = time.monotonic() + self.config.get("startup_timeout", 900)
+        warmup_deadline = None
+        healthy = False
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                raise RuntimeError("Backend exited while loading; inspect local engine log")
+            # Validate ownership against the exact conflict snapshot:
+            # a launched child can appear after an earlier enumeration.
+            native = self.native_processes()
+            self.capture_owned(native)
+            if any(p not in self.owned for p in native):
+                raise RuntimeError("Unmanaged native engine appeared during startup")
+            try:
+                r = await self.http.get(
+                    spec["base_url"] + spec.get("ready_path", "/health"), timeout=2
+                )
+            except httpx.HTTPError:
+                r = None
+            if r is not None and r.is_success:
+                healthy = True
+                # Health success only proves the HTTP server is up. Native
+                # engines run an empty-prompt warmup after that: hold the
+                # loading phase until slots report idle so the first
+                # admitted call is not rejected as a busy engine.
+                if warmup_deadline is None:
+                    warmup_deadline = time.monotonic() + self.config.get("warmup_timeout", 120)
+                if spec.get("probe", "slots") != "slots" or await self.native_busy() is False:
+                    self.mark_ready()
+                    return
+                if time.monotonic() >= warmup_deadline:
+                    # Slots never settled to a verified idle state;
+                    # admission still fail-closes on unknown occupancy.
+                    await self.native_busy()
+                    self.mark_ready()
+                    return
+            await asyncio.sleep(0.25)
+        if healthy:
+            # The server answered /health but the warmup hold outlasted
+            # startup_timeout; a working engine must not fail the load.
+            await self.native_busy()
+            self.mark_ready()
+            return
+        raise TimeoutError("Model startup timed out")
 
     async def close(self):
         token = self.update_authorized.set(True)

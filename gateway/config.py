@@ -64,6 +64,7 @@ def validate(config):
         "interval_seconds",
         "settle_seconds",
         "abort_below_available_bytes",
+        "slot_fit_margin_bytes",
     }:
         raise ValueError("Invalid footprints configuration")
     for key in ("interval_seconds", "settle_seconds"):
@@ -73,11 +74,9 @@ def validate(config):
             or (key == "interval_seconds" and footprints[key] <= 0)
         ):
             raise ValueError(f"footprints.{key} must be a non-negative number")
-    if "abort_below_available_bytes" in footprints and (
-        type(footprints["abort_below_available_bytes"]) is not int
-        or footprints["abort_below_available_bytes"] <= 0
-    ):
-        raise ValueError("footprints.abort_below_available_bytes must be a positive integer")
+    for key in ("abort_below_available_bytes", "slot_fit_margin_bytes"):
+        if key in footprints and (type(footprints[key]) is not int or footprints[key] <= 0):
+            raise ValueError(f"footprints.{key} must be a positive integer")
     seeds = config.get("memory_footprints", [])
     if not isinstance(seeds, list):
         raise ValueError("memory_footprints must be a list")
