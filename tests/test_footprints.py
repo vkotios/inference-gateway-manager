@@ -242,3 +242,92 @@ def test_aux_fingerprint_tracks_path_and_threads(tmp_path):
     assert base != aux_fingerprint("embeddings", "mini", {"path": str(model), "threads": 4})
     assert base != aux_fingerprint("transcription", "mini", {"path": str(model), "threads": 2})
     assert json.dumps(base)  # serializable
+
+
+# Fingerprints computed with the code before {slots} existed. A model that does not use the new
+# placeholders must keep exactly these, or its recorded footprints would silently go stale.
+FINGERPRINT_BEFORE_SLOTS = {
+    "argv": "d34856015ea1aba2980a5966",
+    "config": "4bad9400e3a8e2c75534bd09",
+    "flash_fixed_pool": "aeef7bff9b59eaa0003e7dca",
+}
+
+
+def test_chat_fingerprint_is_unchanged_for_a_spec_without_slot_placeholders():
+    argv_spec = {
+        "_argv_template": ["run", "--ctx", "{context}", "-e", "SLOTS=1"],
+        "argv": ["run", "--ctx", "4096"],
+        "env": {"A": "1"},
+    }
+    assert chat_fingerprint("e", "m", argv_spec) == FINGERPRINT_BEFORE_SLOTS["argv"]
+    config_spec = {
+        "argv": ["strata", "{config_path}"],
+        "env": {},
+        "cwd": "/x",
+        "_config_template": {"args": ["a", "{context}"]},
+        "config_template": {"args": ["a", "4096"]},
+    }
+    assert chat_fingerprint("e", "m", config_spec) == FINGERPRINT_BEFORE_SLOTS["config"]
+    fixed_pool = {
+        "_argv_template": [
+            "podman",
+            "run",
+            "-e",
+            "HALOGEN_CTX={context}",
+            "-e",
+            "HALOGEN_KV_SLOTS=3",
+            "-e",
+            "HALOGEN_KV_POOL_POSITIONS=786432",
+        ],
+        "argv": ["x"],
+        "env": {},
+        "chat_slots": 3,
+    }
+    expected = FINGERPRINT_BEFORE_SLOTS["flash_fixed_pool"]
+    assert chat_fingerprint("halogen-flash", "q", fixed_pool) == expected
+    # chat_slots is not a launch input for it, so changing it changes nothing
+    assert chat_fingerprint("halogen-flash", "q", {**fixed_pool, "chat_slots": 2}) == expected
+
+
+@pytest.mark.parametrize("placeholder", ["{slots}", "{slots_x_context}"])
+def test_chat_fingerprint_follows_chat_slots_when_the_launch_binds_them(placeholder):
+    def launched(slots, context):
+        rendered = str(slots) if placeholder == "{slots}" else str(slots * context)
+        return {
+            "_argv_template": ["run", "--ctx", "{context}", "-e", f"KV={placeholder}"],
+            "argv": ["run", "--ctx", str(context), "-e", f"KV={rendered}"],
+            "env": {},
+            "chat_slots": slots,
+        }
+
+    assert chat_fingerprint("e", "m", launched(2, 4096)) != chat_fingerprint(
+        "e", "m", launched(3, 4096)
+    )
+    # context stays out of it, so one record per slot count covers every context
+    assert chat_fingerprint("e", "m", launched(3, 4096)) == chat_fingerprint(
+        "e", "m", launched(3, 65536)
+    )
+    # a model that declares no chat_slots counts as one
+    without = {k: v for k, v in launched(1, 4096).items() if k != "chat_slots"}
+    assert chat_fingerprint("e", "m", launched(1, 4096)) == chat_fingerprint("e", "m", without)
+
+
+def test_chat_fingerprint_follows_chat_slots_for_a_config_template_placeholder():
+    def launched(slots):
+        return {
+            "argv": ["strata", "{config_path}"],
+            "env": {},
+            "_config_template": {"pool": "{slots_x_context}"},
+            "config_template": {"pool": str(slots * 4096)},
+            "chat_slots": slots,
+        }
+
+    assert chat_fingerprint("e", "m", launched(2)) != chat_fingerprint("e", "m", launched(3))
+    unrendered = {
+        "argv": ["strata", "{config_path}"],
+        "env": {},
+        "config_template": {"pool": "{slots}"},
+    }
+    assert chat_fingerprint("e", "m", {**unrendered, "chat_slots": 2}) != chat_fingerprint(
+        "e", "m", {**unrendered, "chat_slots": 3}
+    )

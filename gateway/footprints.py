@@ -236,18 +236,32 @@ def fingerprint(parts):
     return hashlib.sha256(blob.encode()).hexdigest()[:24]
 
 
+SLOT_PLACEHOLDERS = ("{slots}", "{slots_x_context}")
+
+
 def chat_fingerprint(engine, model, spec):
-    """Launch fingerprint independent of the context (context is tracked separately)."""
-    return fingerprint(
-        {
-            "engine": engine,
-            "model": model,
-            "argv": spec.get("_argv_template", spec.get("argv")),
-            "env": spec.get("env", {}),
-            "cwd": spec.get("cwd"),
-            "config": spec.get("config_template", spec.get("_config_template")),
-        }
+    """Launch fingerprint independent of the context (context is tracked separately).
+
+    ``chat_slots`` is part of it only for a launch that binds ``{slots}`` or ``{slots_x_context}``:
+    then the engine's memory follows the slot count, and a record measured with another count must
+    not be reused. Every other model's fingerprint, and so its records, is unchanged.
+    """
+    argv = spec.get("_argv_template", spec.get("argv"))
+    data = {
+        "engine": engine,
+        "model": model,
+        "argv": argv,
+        "env": spec.get("env", {}),
+        "cwd": spec.get("cwd"),
+        "config": spec.get("config_template", spec.get("_config_template")),
+    }
+    # The placeholders live in the templates; a launched spec keeps its config template under `_config_template`.
+    templates = json.dumps(
+        [argv, spec.get("_config_template", spec.get("config_template"))], default=str
     )
+    if any(placeholder in templates for placeholder in SLOT_PLACEHOLDERS):
+        data["chat_slots"] = spec.get("chat_slots", 1)
+    return fingerprint(data)
 
 
 def path_identity(path):
