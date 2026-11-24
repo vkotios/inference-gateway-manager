@@ -61,7 +61,8 @@ def create_server(client):
     async def gateway_footprints() -> dict:
         """Read recorded memory footprints and, for each chat model, whether it is calibrated
         and whether it fits with the services that are loaded now. A model that is not
-        calibrated unloads the services when it loads."""
+        calibrated unloads the services when it loads. For adjustable chat slots, also
+        returns the slot fit and measurements by count."""
         return await client.footprints()
 
     @server.tool(annotations=change)
@@ -78,6 +79,8 @@ def create_server(client):
         Context and slot-count changes restart the engine; reasoning is a client-overridable
         default. Slots (concurrent chat sessions) change the memory footprint: the context is per
         slot, so memory follows slots times context. Omit slots to keep the current selection.
+        Counts other than the configured default require a measurement or estimate that fits
+        at the requested context. A refused count returns gateway HTTP 409 with the reason.
         System prompts prepend client instructions; omit to retain, or pass empty text to clear.
         Return and preserve selection_id for subsequent delegation. Loading can take minutes.
         Loading a model can unload the CPU transcription and embedding services when they do not

@@ -52,4 +52,4 @@ def test_the_dashboard_has_a_slots_control_that_follows_the_catalog():
     html, script = (static / "index.html").read_text(), (static / "app.js").read_text()
     assert 'id="slots-field" hidden' in html and 'id="slots"' in html
     assert "slot_limits" in script and "body.slots" in script and "Selected slots" in script
-    assert "Not measured at" in script
+    assert "not enough measurements: calibrate slots" in script

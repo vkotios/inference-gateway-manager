@@ -1,0 +1,25 @@
+[
+  {
+    "name": "two positions with a usable fit",
+    "by_slots": {
+      "1": [{"context": 1024, "needs_bytes": 23622320128}, {"context": 4096, "needs_bytes": 30064771072}],
+      "2": [],
+      "3": [],
+      "4": []
+    },
+    "floor": 2147483648,
+    "default": 1,
+    "fit": {"points": 2, "budget": 62277025792, "a": 21474836480, "k": 2097152, "margin": 2147483648},
+    "contexts": [4096, 8192],
+    "selectable": [[1, 2, 3, 4], [1, 2]]
+  },
+  {
+    "name": "one measurement and a default above budget",
+    "by_slots": {"1": [{"context": 1024, "needs_bytes": 23622320128}], "2": [], "3": []},
+    "floor": 2147483648,
+    "default": 1,
+    "fit": {"points": 1, "budget": 10737418240, "reason": "not enough measurements"},
+    "contexts": [1024, 8192],
+    "selectable": [[1], [1]]
+  }
+]

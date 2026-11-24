@@ -115,8 +115,9 @@ function capabilities() {
     const validSlots = value => Number.isSafeInteger(value) && value >= slotLimits.min && value <= slotLimits.max;
     const slotDefaults = loadedSelection ? [state.active_settings?.slots, model.chat_slots, slotLimits.min] : [model.chat_slots, slotLimits.min];
     const defaultSlots = slotDefaults.find(validSlots);
-    const counts = [...new Set([model.chat_slots, ...(slotLimits.presets || [])].filter(validSlots))].sort((a,b) => a-b);
-    for (const count of counts) option($("slots"), count, count === 1 ? "1 slot" : count + " slots");
+    for (let count = slotLimits.min; count <= slotLimits.max; count++) {
+      option($("slots"), count, count === 1 ? "1 slot" : count + " slots");
+    }
     $("slots").value = String(defaultSlots);
   }
   $("reasoning").replaceChildren();
@@ -246,27 +247,83 @@ async function saveAuxSettings(body) {
 }
 $("aux-restore").onchange = () => saveAuxSettings({restore: $("aux-restore").value});
 $("aux-holdoff").onchange = () => saveAuxSettings({restore_holdoff_seconds: Number($("aux-holdoff").value)});
-async function calibrate(engine, model) {
+async function calibrate(engine, model, slots = false) {
   if (!authenticated || working || cancelPending || !engine || !model) return;
-  if (!await askConfirmation("Calibrate " + engine + "/" + model + "?", "The model is reloaded at its maximum context and the current chat model and auxiliary services are unloaded. Loading can take several minutes and may use nearly all memory; the engine is stopped automatically if available memory collapses.", "Calibrate")) return;
+  const contexts = slots
+    ? "The model loads at maximum context, then near one quarter of that context, using its default slots. It stays loaded at the second setting."
+    : "The model is reloaded at its maximum context.";
+  if (!await askConfirmation("Calibrate " + engine + "/" + model + "?", contexts + " This can take several minutes and may unload auxiliary services. The engine stops automatically if available memory falls too low.", slots ? "Calibrate slots" : "Calibrate")) return;
   const epoch = generation; working = true; buttons(); notice("Calibration in progress. This can take several minutes.");
-  try { await api("/api/footprints/calibrate", {engine, model}); if (epoch === generation) notice("Footprint recorded for " + engine + "/" + model + "."); }
+  try {
+    const result = await api("/api/footprints/calibrate", slots ? {engine, model, slots} : {engine, model});
+    if (epoch === generation && slots) {
+      const points = result.records.map(r => `${r.context.toLocaleString()} tokens · ${fmtGiB(r.needs_bytes)}`);
+      const fit = result.fit;
+      const summary = fit.reason || `${fmtGiB(fit.a)} base + ${fit.k.toFixed(1)} bytes per position + ${fmtGiB(fit.margin)} margin`;
+      notice(`${engine}/${model} · ${points.join("; ")} · Fit: ${summary}.`);
+    } else if (epoch === generation) notice("Footprint recorded for " + engine + "/" + model + ".");
+  }
   catch (error) { if (epoch === generation) notice(error.message); }
   finally { if (epoch === generation) { working = false; await poll(); buttons(); } }
 }
 $("calibrate-model").onclick = () => calibrate($("engine").value, $("model").value);
+function slotChoice(bySlots, fit, defaultSlots, slots, context) {
+  const budget = fit.budget ?? null;
+  const covering = (bySlots[slots] || []).filter(r => context != null && r.context >= context);
+  const record = covering.find(r => budget != null && r.needs_bytes <= budget) ?? covering[0];
+  let need = null, source = null;
+  if (record) {
+    need = record.needs_bytes; source = "measured";
+  } else if (fit.a != null && context != null) {
+    need = fit.a + fit.k * (slots * context) + fit.margin;
+    source = `estimated from ${fit.points} measurements`;
+  } else if (slots === defaultSlots) {
+    source = "default count: not measured";
+  }
+  const gib = value => (Math.floor(value / 2 ** 30 * 10 + 0.5) / 10).toFixed(1);
+  let reason = null;
+  if (slots !== defaultSlots && (need == null || budget == null || need > budget)) {
+    if (need == null) reason = "not enough measurements: calibrate slots";
+    else if (budget == null) reason = "memory budget unavailable";
+    else reason = `needs ~${gib(need)} GiB, budget ${gib(budget)} GiB`;
+  }
+  return {needs_bytes: need, source, reason};
+}
 function updateModelFootprint() {
   const chip = $("model-footprint");
   const engine = $("engine").value, model = $("model").value;
   const entry = footprintData?.compatibility?.find(c => c.engine === engine && c.model === model);
+  const cfg = selectedModel(), slots = $("slots"), limits = cfg?.context_limits;
+  let context = cfg?.context ?? null;
+  if (limits?.adjustable) {
+    const value = Number($("context").value === "custom" ? $("custom-context").value : $("context").value);
+    context = Number.isSafeInteger(value) && value >= limits.min && value <= limits.max ? value : null;
+  }
+  const choice = count => slotChoice(entry?.by_slots || {}, entry?.fit || {}, cfg.chat_slots, count, context);
+  if (cfg?.slot_limits?.adjustable) {
+    for (const item of slots.options) {
+      const count = Number(item.value), reason = choice(count).reason;
+      item.disabled = reason != null;
+      item.textContent = `${count} ${count === 1 ? "slot" : "slots"}${reason ? ": " + reason : ""}`;
+    }
+    if (!slots.value || slots.selectedOptions[0]?.disabled) slots.value = String(cfg.chat_slots);
+  }
   let text, warn = false;
   if (!authenticated || !footprintData) text = "Memory footprint appears after sign-in.";
   else if (!model) text = "Select a model to see its memory footprint.";
   else if (!entry) text = "No footprint information for this model.";
-  else if (entry.by_slots && $("slots").value && Number($("slots").value) !== entry.slots) {
-    const found = entry.by_slots[$("slots").value], count = Number($("slots").value);
-    if (!found?.calibrated) { text = `Not measured at ${count} slots: loading it unloads the auxiliary services until its memory is recorded.`; warn = true; }
-    else text = `${fmtGiB(found.needs_bytes)} ${found.source} at ${count} slots`;
+  else if (cfg?.slot_limits?.adjustable && slots.value) {
+    const count = Number(slots.value), selected = choice(count);
+    text = selected.needs_bytes == null ? selected.source : `${fmtGiB(selected.needs_bytes)} · ${selected.source}`;
+    if (context != null && footprintData.loaded_services) {
+      const covering = (entry.by_slots?.[count] || []).find(r =>
+        entry.services_need_exact_context ? r.context === context : r.context >= context);
+      const record = covering ?? entry.service_seeds?.find(r => r.context == null || r.context >= context);
+      const auxBytes = footprintData.loaded_services_bytes;
+      const budget = entry.fit?.budget;
+      warn = !record || auxBytes == null || budget == null || record.needs_bytes + auxBytes > budget;
+      if (warn) text += " · loading would unload auxiliary services";
+    }
   }
   else if (!entry.calibrated) { text = `Not calibrated${entry.by_slots ? " at " + entry.slots + (entry.slots === 1 ? " slot" : " slots") : ""}: loading it unloads the auxiliary services until its memory is recorded.`; warn = true; }
   else text = `${fmtGiB(entry.needs_bytes)} ${entry.source}` + (entry.fits_with_loaded_services == null ? "" : entry.fits_with_loaded_services ? " · fits with the loaded services" : " · the loaded services would unload");
@@ -280,7 +337,7 @@ function showFootprints(data) {
   const missing = rows.filter(r => !r.calibrated).length, m = data.memory || {};
   const summaryText = `${rows.length - missing} calibrated · ${missing} not calibrated · ${fmtGiB(m.available_bytes)} available of ${fmtGiB(m.total_bytes)}` +
     (data.loaded ? ` · recording ${data.loaded.key}: ${fmtGiB(data.loaded.peak_bytes)} so far${data.loaded.settled ? "" : " (settling)"}` : "") + (data.error ? " · " + data.error : "");
-  const key = JSON.stringify([rows.map(r => [r.engine, r.model, r.context, r.calibrated, r.source, r.needs_bytes && Math.round(r.needs_bytes / 1048576), r.fits_with_loaded_services]), working, cancelPending, footprintBusy, authenticated, Boolean(data.loaded?.samples)]);
+  const key = JSON.stringify([rows.map(r => [r.engine, r.model, r.context, r.calibrated, r.source, r.needs_bytes && Math.round(r.needs_bytes / 1048576), r.fits_with_loaded_services, r.can_calibrate_slots]), working, cancelPending, footprintBusy, authenticated, Boolean(data.loaded?.samples)]);
   if (key === footprintKey) { const summary = $("footprint-summary"); if (summary) summary.textContent = summaryText; return; }
   footprintKey = key;
   const head = document.createElement("div"); head.className = "fphead";
@@ -308,11 +365,15 @@ function showFootprints(data) {
     const fp = cell(r.calibrated ? `${fmtGiB(r.needs_bytes)} ${r.source}` : "not calibrated"); fp.className = r.calibrated ? "chip" : "warn";
     cell(!r.calibrated ? "services unload" : r.fits_with_loaded_services == null ? "n/a" : r.fits_with_loaded_services ? "fits" : "services unload");
     const act = document.createElement("td"); act.className = "act";
-    const button = document.createElement("button"); button.type = "button"; button.className = "secondary"; button.textContent = "Calibrate";
-    button.setAttribute("aria-label", "Calibrate " + r.engine + "/" + r.model);
-    button.disabled = !authenticated || working || cancelPending;
-    button.onclick = () => calibrate(r.engine, r.model);
-    act.append(button); tr.append(act); body.append(tr);
+    for (const slots of r.can_calibrate_slots ? [false, true] : [false]) {
+      const label = slots ? "Calibrate slots" : "Calibrate at max context";
+      const button = document.createElement("button"); button.type = "button"; button.className = "secondary"; button.textContent = label;
+      button.setAttribute("aria-label", label + " for " + r.engine + "/" + r.model);
+      button.disabled = !authenticated || working || cancelPending;
+      button.onclick = () => calibrate(r.engine, r.model, slots);
+      act.append(button);
+    }
+    tr.append(act); body.append(tr);
   }
   table.append(thead, body); list.replaceChildren(table);
 }
@@ -509,8 +570,8 @@ $("refresh-catalog").onclick = async () => {
 $("engine").onchange = () => { models(); buttons(); };
 $("model").onchange = () => { capabilities(); buttons(); }; $("force").onchange = buttons;
 $("slots").onchange = updateModelFootprint;
-$("context").onchange = () => { $("custom-context-field").hidden = $("context").value !== "custom"; $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); if ($("context").value === "custom") $("custom-context").focus(); };
-$("custom-context").oninput = () => { $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); };
+$("context").onchange = () => { $("custom-context-field").hidden = $("context").value !== "custom"; $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); if ($("context").value === "custom") $("custom-context").focus(); updateModelFootprint(); };
+$("custom-context").oninput = () => { $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); updateModelFootprint(); };
 $("select-engine").onclick = () => { if ($("engine").value) action("/api/engine", {engine: $("engine").value}); };
 $("load").onclick = () => {
   const model = selectedModel(); if (!model) return;

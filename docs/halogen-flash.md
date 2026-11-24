@@ -24,6 +24,8 @@ Run image mode `all`, with `HALOGEN_CHECKPOINT`, `HALOGEN_TOKENIZER`, `HALOGEN_M
 
 Mount the approved model root read-only at the same absolute path. Keep `-e IGM_ENGINE_RUN_ID={launch_id}` so detached descendants retain their ownership identity. Upstream's rootless Podman device/group flags, IPC/memlock settings and the Fedora SELinux volume flag are shared with [Halogen](halogen.md). Docker needs a separately reviewed group configuration. Verify the installed ROCm/HIP stack and host memory settings against upstream requirements before loading.
 
+With adjustable limits, Flash's configured three slots remain selectable. Other counts are available when the measured footprint or the fitted estimate fits the selected context. Run **Calibrate slots** to measure two contexts at three slots and build the fit. The second context remains loaded. See the memory guard and calibration details in [Features](features.md).
+
 Readiness is `/health`. Occupancy is **`gateway_only`**: upstream [documents `/slots`](https://github.com/peonist-ai/halogen-flash-server/blob/47ceb43/docs/api.md) as `{id, n_ctx}` entries, without the boolean `is_processing` required by IGM's native-slots probe. All inference must use IGM; direct backend callers bypass occupancy measurement. This mode is not verified native idle.
 
 ## Registration and deployment
