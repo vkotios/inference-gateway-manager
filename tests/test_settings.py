@@ -205,6 +205,7 @@ async def test_settings_restart_readback_frozen_spec_and_invalid_preflight(tmp_p
         assert m.active_settings == {
             "context": 4096,
             "requested_context": 8192,
+            "slots": 1,
             "context_source": "native_slots",
             "reasoning": "off",
             "system_prompt": "",
@@ -468,3 +469,349 @@ async def test_context_change_rerenders_slots_x_context_from_the_template(tmp_pa
         assert "POOL={slots_x_context}" in cfg["engines"]["one"]["models"]["fixture"]["argv"]
     finally:
         await m.close()
+
+
+# ---- slot selection ---------------------------------------------------------------------------
+
+
+def adjustable_slots_spec(tmp_path, **extra):
+    spec = settings_config(tmp_path)["engines"]["one"]["models"]["fixture"]
+    spec["context"] = 262144
+    spec["context_limits"] = {
+        "min": 1024,
+        "max": 262144,
+        "presets": [65536, 262144],
+        "adjustable": True,
+    }
+    spec["argv"] += ["--parallel", "{slots}", "--ctx-size", "{slots_x_context}"]
+    spec["chat_slots"] = 1
+    spec["slot_limits"] = {"min": 1, "max": 4, "presets": [1, 2, 3, 4], "adjustable": True}
+    spec.update(extra)
+    return spec
+
+
+def test_slot_limits_default_to_fixed_at_chat_slots_and_appear_in_the_summary(tmp_path):
+    from gateway.settings import capabilities, summary
+
+    spec = settings_config(tmp_path)["engines"]["one"]["models"]["fixture"]
+    assert capabilities(spec)["slot_limits"] == {
+        "min": 1,
+        "max": 1,
+        "presets": [1],
+        "adjustable": False,
+    }
+    three = {**spec, "chat_slots": 3}
+    assert capabilities(three)["slot_limits"] == {
+        "min": 3,
+        "max": 3,
+        "presets": [3],
+        "adjustable": False,
+    }
+    shown = summary("fixture", adjustable_slots_spec(tmp_path))
+    assert shown["chat_slots"] == 1
+    assert shown["slot_limits"] == {"min": 1, "max": 4, "presets": [1, 2, 3, 4], "adjustable": True}
+
+
+@pytest.mark.parametrize(
+    "change,message",
+    [
+        (
+            {
+                "slot_limits": {"min": 1, "max": 4, "presets": [1, 2], "adjustable": True},
+                "argv": ["x", "{context}"],
+            },
+            "{slots}",
+        ),
+        ({"chat_slots": 5}, "slot range"),
+        ({"chat_slots": 0}, "chat_slots"),
+        ({"slot_limits": {"min": 2, "max": 4, "presets": [2], "adjustable": True}}, "slot range"),
+        ({"slot_limits": {"min": 1, "max": 4, "presets": [1, 9], "adjustable": True}}, "presets"),
+        ({"slot_limits": {"min": 1, "max": 4, "presets": [1], "adjustable": "yes"}}, "slot limits"),
+        ({"slot_limits": {"min": 1, "max": 4, "presets": [1]}}, "requires min"),
+        ({"slot_limits": {"min": 1, "max": 2, "presets": [1], "adjustable": False}}, "Fixed"),
+        (
+            {"slot_limits": {"min": True, "max": 4, "presets": [1], "adjustable": True}},
+            "slot range",
+        ),
+    ],
+)
+def test_invalid_slot_limits_are_refused(tmp_path, change, message):
+    from gateway.settings import select, validate_capabilities
+
+    spec = adjustable_slots_spec(tmp_path, **change)
+    with pytest.raises(ValueError, match=message.replace("{", r"\{").replace("}", r"\}")):
+        validate_capabilities(spec)
+    with pytest.raises(HTTPException) as refused:
+        select(spec)
+    assert refused.value.status_code == 422 and "Invalid model capabilities" in refused.value.detail
+
+
+def test_adjustable_slots_may_bind_slots_in_a_config_template(tmp_path):
+    from gateway.settings import select, validate_capabilities
+
+    spec = adjustable_slots_spec(tmp_path, config_template={"slots": "{slots}"})
+    spec["argv"] = [a for a in spec["argv"] if "{slots}" not in a]
+    spec["argv"] = [a for a in spec["argv"] if a != "--parallel"]
+    validate_capabilities(spec)
+    chosen, settings = select(spec, 65536, slots=3)
+    assert chosen["config_template"] == {"slots": "3"} and settings["slots"] == 3
+
+
+def test_select_with_slots_renders_parallel_and_the_pool_and_freezes_chat_slots(tmp_path):
+    from gateway.settings import select
+
+    spec = adjustable_slots_spec(tmp_path)
+    chosen, settings = select(spec, 262144, slots=2)
+    argv = chosen["argv"]
+    assert argv[argv.index("--parallel") + 1] == "2"
+    assert argv[argv.index("--ctx-size") + 1] == "524288"  # 2 x 262,144
+    assert chosen["chat_slots"] == 2 and settings["slots"] == 2 and settings["context"] == 262144
+    assert spec["chat_slots"] == 1  # the administrator's entry is not changed
+    # omitted: the model's own count, so a reload at one slot is the command line it has always had
+    default, default_settings = select(spec, 262144)
+    assert default_settings["slots"] == 1
+    assert default["argv"][default["argv"].index("--ctx-size") + 1] == "262144"
+    assert select(spec, 65536, slots=4)[0]["argv"][-1] == "262144"  # 4 x 65,536
+
+
+@pytest.mark.parametrize("slots", [0, 5, -1, True, "2", 2.0])
+def test_slots_outside_the_limits_or_of_the_wrong_type_are_422(tmp_path, slots):
+    from gateway.settings import select
+
+    with pytest.raises(HTTPException) as refused:
+        select(adjustable_slots_spec(tmp_path), slots=slots)
+    assert refused.value.status_code == 422
+    assert refused.value.detail == "Slot count is not supported by this model"
+
+
+def test_a_model_without_adjustable_slots_accepts_only_its_own_count(tmp_path):
+    from gateway.settings import select
+
+    spec = {**settings_config(tmp_path)["engines"]["one"]["models"]["fixture"], "chat_slots": 3}
+    assert select(spec, slots=3)[1]["slots"] == 3
+    with pytest.raises(HTTPException) as refused:
+        select(spec, slots=2)
+    assert refused.value.status_code == 422
+
+
+def slots_app(tmp_path, native_slots=4, **extra):
+    import json
+
+    cfg = settings_config(tmp_path)
+    cfg["engines"]["one"]["models"]["fixture"] = adjustable_slots_spec(
+        tmp_path, admission={"reservedInteractive": 1}, **extra
+    )
+    # what the fixture backend reports on /slots: one entry per native slot
+    (tmp_path / "slots.json").write_text(
+        json.dumps(
+            [{"id": i, "is_processing": False, "n_ctx": 262144} for i in range(native_slots)]
+        )
+    )
+    return create_app(cfg, "a" * 32, "b" * 32, tmp_path)
+
+
+def admin(app):
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={"Authorization": "Bearer " + "a" * 32},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_slot_change_restarts_the_engine_and_other_changes_do_not(tmp_path):
+    app = slots_app(tmp_path)
+    manager = app.state.manager
+    try:
+        async with admin(app) as client:
+            first = await client.post(
+                "/api/model", json={"engine": "one", "model": "fixture", "slots": 2}
+            )
+            assert first.status_code == 200
+            assert first.json()["active_settings"]["slots"] == 2
+            process = manager.process
+            # the same slots with a changed reasoning default: applied to the running engine
+            changed = await client.post("/api/model", json={"model": "fixture", "reasoning": "on"})
+            assert changed.status_code == 200 and manager.process is process
+            assert changed.json()["active_settings"]["slots"] == 2
+            # slots omitted: the selected count is kept, nothing restarts
+            kept = await client.post("/api/model", json={"model": "fixture"})
+            assert kept.status_code == 200 and manager.process is process
+            assert kept.json()["active_settings"]["slots"] == 2
+            # the same count stated again is not a change either
+            same = await client.post("/api/model", json={"model": "fixture", "slots": 2})
+            assert same.status_code == 200 and manager.process is process
+            # a different count restarts the engine
+            more = await client.post("/api/model", json={"model": "fixture", "slots": 3})
+            assert more.status_code == 200 and manager.process is not process
+            assert more.json()["active_settings"]["slots"] == 3
+            assert (
+                more.json()["active_settings"]["reasoning"] == "on"
+            )  # the other settings carry over
+            # a context change keeps the slot count, and the count in the launch follows it
+            resized = await client.post("/api/model", json={"model": "fixture", "context": 65536})
+            assert resized.json()["active_settings"]["slots"] == 3
+            assert manager.active_spec["chat_slots"] == 3
+            assert manager.active_spec["argv"][-1] == str(3 * 65536)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_slots_outside_the_limits_are_refused_without_touching_the_loaded_model(tmp_path):
+    app = slots_app(tmp_path)
+    manager = app.state.manager
+    try:
+        async with admin(app) as client:
+            assert (
+                await client.post(
+                    "/api/model", json={"engine": "one", "model": "fixture", "slots": 2}
+                )
+            ).status_code == 200
+            process = manager.process
+            for bad in (0, 5, "2", True, 2.5):
+                refused = await client.post("/api/model", json={"model": "fixture", "slots": bad})
+                assert refused.status_code == 422, bad
+            assert manager.process is process and manager.active_settings["slots"] == 2
+            assert (await client.post("/api/model", json={"model": "fixture"})).status_code == 200
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_chat_capacity_and_the_broker_follow_the_selected_slots(tmp_path):
+    app = slots_app(tmp_path, native_slots=4)
+    manager = app.state.manager
+    try:
+        async with admin(app) as client:
+            three = await client.post(
+                "/api/model", json={"engine": "one", "model": "fixture", "slots": 3}
+            )
+            assert three.json()["chat_slots"]["total"] == 3
+            admission = (await client.get("/api/admission")).json()
+            assert admission["mode"] == "queued" and admission["slots_total"] == 3
+            assert admission["reserved_now"] == 1  # the configured reservation, within 3 slots
+            one = await client.post("/api/model", json={"model": "fixture", "slots": 1})
+            assert one.json()["chat_slots"]["total"] == 1
+            admission = (await client.get("/api/admission")).json()
+            assert admission["mode"] == "single" and admission["slots_total"] == 1
+            assert admission["reserved_now"] == 0  # a single slot is never reserved away
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_chat_capacity_is_capped_by_the_slots_the_engine_reports(tmp_path):
+    app = slots_app(tmp_path, native_slots=2)
+    manager = app.state.manager
+    try:
+        async with admin(app) as client:
+            loaded = await client.post(
+                "/api/model", json={"engine": "one", "model": "fixture", "slots": 4}
+            )
+            assert loaded.json()["active_settings"]["slots"] == 4
+            assert loaded.json()["chat_slots"]["total"] == 2  # the engine only has two
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_without_slots_a_load_behaves_as_before(tmp_path):
+    cfg = settings_config(tmp_path)
+    app = create_app(cfg, "a" * 32, "b" * 32, tmp_path)
+    manager = app.state.manager
+    try:
+        async with admin(app) as client:
+            loaded = await client.post("/api/model", json={"engine": "one", "model": "fixture"})
+            assert loaded.status_code == 200
+            assert loaded.json()["active_settings"]["slots"] == 1
+            process = manager.process
+            assert (await client.post("/api/model", json={"model": "fixture"})).status_code == 200
+            assert manager.process is process
+            refused = await client.post("/api/model", json={"model": "fixture", "slots": 2})
+            assert refused.status_code == 422  # not adjustable: only its own count
+            catalog = (await client.get("/api/engines")).json()["engines"][0]["models"][0]
+            assert catalog["slot_limits"]["adjustable"] is False and catalog["chat_slots"] == 1
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_prepare_model_inherits_the_selected_slots_on_a_context_change(tmp_path):
+    cfg = settings_config(tmp_path)
+    cfg["engines"]["one"]["models"]["fixture"] = adjustable_slots_spec(tmp_path)
+    m = Manager(cfg, tmp_path)
+    try:
+        engine, first, settings = m.prepare_model("fixture", engine="one", context=262144, slots=2)
+        assert settings["slots"] == 2
+        m.engine, m.model, m.active_spec, m.selected_settings = engine, "fixture", first, settings
+        _, second, again = m.prepare_model("fixture", context=65536)
+        assert again["slots"] == 2 and second["argv"][-1] == str(2 * 65536)
+        # an explicit count wins, and the frozen spec's own count never leaks into a fresh load
+        _, third, explicit = m.prepare_model("fixture", slots=4)
+        assert explicit["slots"] == 4 and third["chat_slots"] == 4
+        m.engine = m.model = m.active_spec = m.selected_settings = None
+        _, fresh, default = m.prepare_model("fixture", engine="one")
+        assert default["slots"] == 1 and fresh["chat_slots"] == 1
+    finally:
+        await m.close()
+
+
+@pytest.mark.asyncio
+async def test_footprint_view_stays_at_the_default_slots_and_shows_a_record_per_slot_count(
+    tmp_path,
+):
+    from gateway.footprints import CHAT, Footprint, chat_fingerprint
+
+    app = slots_app(tmp_path)
+    manager = app.state.manager
+    try:
+        async with admin(app) as client:
+            await client.post("/api/model", json={"engine": "one", "model": "fixture", "slots": 3})
+            view = (await client.get("/api/footprints")).json()
+            entry = next(c for c in view["compatibility"] if c["model"] == "fixture")
+            # the list is always at the model's own count, whatever is loaded now
+            assert entry["slots"] == 1 and entry["calibrated"] is False
+            assert sorted(entry["by_slots"]) == ["1", "2", "3", "4"]
+            assert not any(v["calibrated"] for v in entry["by_slots"].values())
+            # a measurement at 2 slots covers 2 slots and nothing else
+            _e, spec, settings = manager.prepare_model("fixture", "one", 262144, slots=2)
+            manager.tracker.store.record(
+                Footprint(
+                    CHAT,
+                    "one/fixture",
+                    40 * 1024**3,
+                    41 * 1024**3,
+                    0,
+                    settings["context"],
+                    chat_fingerprint("one", "fixture", spec),
+                    "measured",
+                    1.0,
+                    "slots=2",
+                )
+            )
+            view = (await client.get("/api/footprints")).json()
+            entry = next(c for c in view["compatibility"] if c["model"] == "fixture")
+            assert entry["calibrated"] is False
+            assert [k for k, v in entry["by_slots"].items() if v["calibrated"]] == ["2"]
+            assert entry["by_slots"]["2"]["source"] == "measured"
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_calibrate_reloads_at_the_default_slots(tmp_path):
+    app = slots_app(tmp_path)
+    manager = app.state.manager
+    app.state.manager.tracker.settle_seconds = 0.0
+    app.state.manager.tracker.interval = 0.0
+    try:
+        async with admin(app) as client:
+            await client.post("/api/model", json={"engine": "one", "model": "fixture", "slots": 3})
+            assert manager.active_settings["slots"] == 3
+            calibrated = await client.post(
+                "/api/footprints/calibrate", json={"engine": "one", "model": "fixture"}
+            )
+            assert manager.active_settings["slots"] == 1, calibrated.text
+    finally:
+        await manager.close()

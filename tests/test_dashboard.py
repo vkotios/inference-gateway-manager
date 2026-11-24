@@ -43,3 +43,13 @@ async def test_dashboard_catalog_and_real_host_telemetry(tmp_path):
             assert (await c.post("/api/model", json={"model": "qwen"})).status_code == 409
     finally:
         await app.state.manager.close()
+
+
+def test_the_dashboard_has_a_slots_control_that_follows_the_catalog():
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "gateway" / "static"
+    html, script = (static / "index.html").read_text(), (static / "app.js").read_text()
+    assert 'id="slots-field" hidden' in html and 'id="slots"' in html
+    assert "slot_limits" in script and "body.slots" in script and "Selected slots" in script
+    assert "Not measured at" in script

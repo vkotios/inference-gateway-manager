@@ -11,6 +11,7 @@ ENDPOINTS = {"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/compl
 
 def capabilities(spec):
     context = spec.get("context")
+    slots = spec.get("chat_slots", 1)
     limits = spec.get(
         "context_limits",
         {
@@ -20,8 +21,12 @@ def capabilities(spec):
             "adjustable": False,
         },
     )
+    slot_limits = spec.get(
+        "slot_limits", {"min": slots, "max": slots, "presets": [slots], "adjustable": False}
+    )
     return {
         "context_limits": copy.deepcopy(limits),
+        "slot_limits": copy.deepcopy(slot_limits),
         "reasoning_modes": list(spec.get("reasoning_modes", ["auto"])),
         "reasoning_change": spec.get("reasoning_change", "fixed"),
         "system_prompt_supported": spec.get("system_prompt_supported", True),
@@ -32,6 +37,7 @@ def summary(model, spec):
     return {
         "id": model,
         "context": spec.get("context"),
+        "chat_slots": spec.get("chat_slots", 1),
         "reasoning": spec.get("reasoning", "auto"),
         "enabled": spec.get("enabled", True),
         **(
@@ -41,6 +47,30 @@ def summary(model, spec):
         ),
         **capabilities(spec),
     }
+
+
+def validate_slot_limits(spec, limits):
+    """``slot_limits``: integers of at least 1 around ``chat_slots``; adjustable needs a ``{slots}`` binding."""
+    slots = spec.get("chat_slots", 1)
+    if type(slots) is not int or slots < 1:
+        raise ValueError("chat_slots must be a positive integer")
+    if not isinstance(limits, dict) or set(limits) != {"min", "max", "presets", "adjustable"}:
+        raise ValueError("slot_limits requires min, max, presets, adjustable")
+    if type(limits["adjustable"]) is not bool or not isinstance(limits["presets"], list):
+        raise ValueError("Invalid slot limits")
+    lower, upper = limits["min"], limits["max"]
+    if any(type(v) is not int or v < 1 for v in (lower, upper)) or not lower <= slots <= upper:
+        raise ValueError("Invalid slot range/default")
+    if any(type(v) is not int or not lower <= v <= upper for v in limits["presets"]):
+        raise ValueError("Invalid slot presets")
+    if not limits["adjustable"] and (lower != slots or upper != slots):
+        raise ValueError("Fixed slot limits must match chat_slots")
+    if (
+        limits["adjustable"]
+        and not any("{slots}" in arg for arg in spec.get("argv", []))
+        and "{slots}" not in json.dumps(spec.get("config_template", {}))
+    ):
+        raise ValueError("Adjustable slots require an administrator {slots} argv binding")
 
 
 def validate_capabilities(spec):
@@ -80,6 +110,7 @@ def validate_capabilities(spec):
             and "{context}" not in json.dumps(spec.get("config_template", {}))
         ):
             raise ValueError("Adjustable context requires an administrator {context} argv binding")
+    validate_slot_limits(spec, caps["slot_limits"])
     modes, change = caps["reasoning_modes"], caps["reasoning_change"]
     if (
         not modes
@@ -140,7 +171,7 @@ def render_launch(text, context, chat_slots):
     return text.replace("{slots}", str(chat_slots)).replace("{context}", str(context))
 
 
-def select(spec, context=None, reasoning=None, system_prompt=None):
+def select(spec, context=None, reasoning=None, system_prompt=None, slots=None):
     try:
         validate_capabilities(spec)
     except (ValueError, TypeError, KeyError) as exc:
@@ -156,6 +187,15 @@ def select(spec, context=None, reasoning=None, system_prompt=None):
         or not limits["min"] <= context <= limits["max"]
     ):
         raise HTTPException(422, "Context is not supported by this model")
+    slot_limits = caps["slot_limits"]
+    default_slots = spec.get("chat_slots", 1)
+    if slots is not None and (
+        type(slots) is not int
+        or not slot_limits["min"] <= slots <= slot_limits["max"]
+        or (not slot_limits["adjustable"] and slots != default_slots)
+    ):
+        raise HTTPException(422, "Slot count is not supported by this model")
+    chosen_slots = default_slots if slots is None else slots
     reasoning = spec.get("reasoning", "auto") if reasoning is None else reasoning
     if reasoning not in caps["reasoning_modes"]:
         raise HTTPException(422, "Reasoning mode is not supported by this model")
@@ -166,15 +206,17 @@ def select(spec, context=None, reasoning=None, system_prompt=None):
     if system_prompt and not caps["system_prompt_supported"]:
         raise HTTPException(422, "System prompt is not supported by this model")
     chosen = copy.deepcopy(spec)
-    slots = spec.get("chat_slots", 1)
-    chosen["argv"] = [render_launch(a, requested_context, slots) for a in chosen["argv"]]
+    # The selected count replaces chat_slots in the frozen spec, so rendering, the footprint fingerprint
+    # and the chat capacity all follow it.
+    chosen["chat_slots"] = chosen_slots
+    chosen["argv"] = [render_launch(a, requested_context, chosen_slots) for a in chosen["argv"]]
     chosen["argv"].extend(chosen.get("reasoning_argv", {}).get(reasoning, []))
     if "config_template" in chosen:
         chosen["_config_template"] = copy.deepcopy(chosen["config_template"])
 
         def render(value):
             if isinstance(value, str):
-                return render_launch(value, requested_context, slots)
+                return render_launch(value, requested_context, chosen_slots)
             if isinstance(value, list):
                 return [render(item) for item in value]
             if isinstance(value, dict):
@@ -184,6 +226,7 @@ def select(spec, context=None, reasoning=None, system_prompt=None):
         chosen["config_template"] = render(chosen["config_template"])
     return chosen, {
         "context": requested_context,
+        "slots": chosen_slots,
         "reasoning": reasoning,
         "system_prompt": system_prompt,
     }

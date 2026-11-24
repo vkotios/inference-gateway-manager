@@ -331,3 +331,39 @@ def test_chat_fingerprint_follows_chat_slots_for_a_config_template_placeholder()
     assert chat_fingerprint("e", "m", {**unrendered, "chat_slots": 2}) != chat_fingerprint(
         "e", "m", {**unrendered, "chat_slots": 3}
     )
+
+
+def test_slot_counts_have_different_fingerprints_and_a_record_does_not_cover_another_count(
+    tmp_path,
+):
+    from gateway.settings import select
+
+    spec = {
+        "argv": [
+            "engine",
+            "--parallel",
+            "{slots}",
+            "--ctx-size",
+            "{slots_x_context}",
+            "--c",
+            "{context}",
+        ],
+        "base_url": "http://127.0.0.1:1",
+        "context": 4096,
+        "chat_slots": 1,
+        "context_limits": {"min": 1024, "max": 65536, "presets": [4096], "adjustable": True},
+        "slot_limits": {"min": 1, "max": 4, "presets": [1, 2, 3, 4], "adjustable": True},
+    }
+
+    def frozen(slots, context):
+        chosen, _ = select(spec, context, slots=slots)
+        chosen["_argv_template"] = spec["argv"]
+        return chosen
+
+    two, three = frozen(2, 4096), frozen(3, 4096)
+    assert chat_fingerprint("e", "m", two) != chat_fingerprint("e", "m", three)
+    assert chat_fingerprint("e", "m", two) == chat_fingerprint("e", "m", frozen(2, 65536))
+    store = FootprintStore(tmp_path / "f.json")
+    store.record(chat(fingerprint=chat_fingerprint("e", "m", two), context=4096))
+    assert store.lookup("chat", "e/m", chat_fingerprint("e", "m", two), 4096) is not None
+    assert store.lookup("chat", "e/m", chat_fingerprint("e", "m", three), 4096) is None

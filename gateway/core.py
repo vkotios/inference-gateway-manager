@@ -381,17 +381,29 @@ class Manager:
             await self._stop(force)
 
     async def load_model(
-        self, model, force=False, *, engine=None, context=None, reasoning=None, system_prompt=None
+        self,
+        model,
+        force=False,
+        *,
+        engine=None,
+        context=None,
+        reasoning=None,
+        system_prompt=None,
+        slots=None,
     ):
         self.check_update()
         # Invalid force requests must never cancel another in-flight load.
-        self.prepare_model(model, engine, context, reasoning, system_prompt)
+        self.prepare_model(model, engine, context, reasoning, system_prompt, slots)
         await self.interrupt_loading(force)
         if self.lifecycle_busy:
             raise HTTPException(409, "Lifecycle operation already running")
         operation = (
             self._load_model(model, force)
-            if engine is None and context is None and reasoning is None and system_prompt is None
+            if engine is None
+            and context is None
+            and reasoning is None
+            and system_prompt is None
+            and slots is None
             else self._load_model(
                 model,
                 force,
@@ -399,6 +411,7 @@ class Manager:
                 context=context,
                 reasoning=reasoning,
                 system_prompt=system_prompt,
+                slots=slots,
             )
         )
         task = asyncio.create_task(operation)
@@ -418,7 +431,9 @@ class Manager:
             if self.loading_task is task:
                 self.loading_task = None
 
-    def prepare_model(self, model, engine=None, context=None, reasoning=None, system_prompt=None):
+    def prepare_model(
+        self, model, engine=None, context=None, reasoning=None, system_prompt=None, slots=None
+    ):
         self.check_update()
         target_engine = engine if engine is not None else self.engine
         if not target_engine:
@@ -449,17 +464,27 @@ class Manager:
                 reasoning = self.selected_settings["reasoning"]
             if system_prompt is None:
                 system_prompt = self.selected_settings.get("system_prompt", "")
-        spec, settings = select(source, context, reasoning, system_prompt)
+            if slots is None:
+                slots = self.selected_settings.get("slots")
+        spec, settings = select(source, context, reasoning, system_prompt, slots)
         spec["_argv_template"] = source["argv"]
         return target_engine, spec, settings
 
     async def _load_model(
-        self, model, force=False, *, engine=None, context=None, reasoning=None, system_prompt=None
+        self,
+        model,
+        force=False,
+        *,
+        engine=None,
+        context=None,
+        reasoning=None,
+        system_prompt=None,
+        slots=None,
     ):
         async with self.lock:
             self.check_update()
             target_engine, spec, settings = self.prepare_model(
-                model, engine, context, reasoning, system_prompt
+                model, engine, context, reasoning, system_prompt, slots
             )
             same_model = target_engine == self.engine and model == self.model
             if (
@@ -470,9 +495,15 @@ class Manager:
             ):
                 if settings == self.selected_settings:
                     return
-                if settings["context"] == self.selected_settings["context"] and (
-                    settings["reasoning"] == self.selected_settings["reasoning"]
-                    or spec.get("reasoning_change", "fixed") == "request"
+                # A different context or slot count changes the launch, so it restarts the engine;
+                # reasoning and the system prompt can be applied to the running one.
+                if (
+                    settings["context"] == self.selected_settings["context"]
+                    and (settings.get("slots") == self.selected_settings.get("slots"))
+                    and (
+                        settings["reasoning"] == self.selected_settings["reasoning"]
+                        or spec.get("reasoning_change", "fixed") == "request"
+                    )
                 ):
                     self.selected_settings = settings
                     self.active_settings["reasoning"] = settings["reasoning"]
@@ -493,6 +524,7 @@ class Manager:
             self.active_settings = {
                 "context": settings["context"],
                 "requested_context": settings["context"],
+                "slots": settings["slots"],
                 "context_source": "declared" if settings["context"] is not None else "unknown",
                 "reasoning": settings["reasoning"],
                 "system_prompt": settings["system_prompt"],
@@ -510,6 +542,7 @@ class Manager:
                         f"{target_engine}/{model}",
                         chat_fingerprint(target_engine, model, spec),
                         settings["context"],
+                        settings["slots"],
                     )
                 argv = spec["argv"]
                 if "config_template" in spec:

@@ -185,3 +185,34 @@ async def test_registration_errors_explain_correction_and_redact_credentials():
             await client.inspect_model("llama", "/models/example.gguf")
     assert "tokenizer companion is missing" in str(error.value)
     assert "a" * 32 not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_load_forwards_validated_slots_and_leaves_them_out_when_omitted():
+    import json
+
+    from gateway.client import GatewayClient
+
+    bodies = []
+
+    def backend(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"phase": "ready"})
+
+    async with GatewayClient(
+        "http://gateway.lan:9000", "a" * 32, transport=httpx.MockTransport(backend)
+    ) as client:
+        await client.load("llama", "model", context=65536, slots=2)
+        await client.load("llama", "model")
+        for bad in (0, -1, 65, True, "2", 2.5):
+            with pytest.raises(ValueError):
+                await client.load("llama", "model", slots=bad)
+    assert bodies[0] == {
+        "engine": "llama",
+        "model": "model",
+        "context": 65536,
+        "slots": 2,
+        "force": False,
+    }
+    assert "slots" not in bodies[1]
+    assert len(bodies) == 2  # the invalid ones never reached the gateway

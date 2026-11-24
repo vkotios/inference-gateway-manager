@@ -84,6 +84,7 @@ function buttons() {
   const model = selectedModel();
   $("custom-context").disabled = !authenticated || working || cancelPending || !model?.context_limits?.adjustable;
   $("context").disabled = !authenticated || working || cancelPending || !model?.context_limits?.adjustable;
+  $("slots").disabled = !authenticated || working || cancelPending || !model?.slot_limits?.adjustable;
   $("reasoning").disabled = !authenticated || working || cancelPending || (model?.reasoning_modes || ["auto"]).length < 2;
   $("system-prompt").disabled = !authenticated || working || cancelPending || !model || model.system_prompt_supported === false;
   $("calibrate-model").disabled = !authenticated || working || cancelPending || !$("engine").value || !$("model").value;
@@ -108,12 +109,22 @@ function capabilities() {
     $("custom-context").min = limits.min; $("custom-context").max = limits.max; $("custom-context").value = defaultContext;
     $("custom-context-field").hidden = $("context").value !== "custom";
   } else option($("context"), "", model ? `${model.context ?? "Unknown"} tokens · fixed` : "Model default");
+  const slotLimits = model?.slot_limits;
+  $("slots").replaceChildren(); $("slots-field").hidden = !slotLimits?.adjustable;
+  if (slotLimits?.adjustable) {
+    const validSlots = value => Number.isSafeInteger(value) && value >= slotLimits.min && value <= slotLimits.max;
+    const slotDefaults = loadedSelection ? [state.active_settings?.slots, model.chat_slots, slotLimits.min] : [model.chat_slots, slotLimits.min];
+    const defaultSlots = slotDefaults.find(validSlots);
+    const counts = [...new Set([model.chat_slots, ...(slotLimits.presets || [])].filter(validSlots))].sort((a,b) => a-b);
+    for (const count of counts) option($("slots"), count, count === 1 ? "1 slot" : count + " slots");
+    $("slots").value = String(defaultSlots);
+  }
   $("reasoning").replaceChildren();
   for (const mode of model?.reasoning_modes || ["auto"]) option($("reasoning"), mode, mode === "auto" ? "Auto" : mode === "on" ? "On" : "Off");
   const defaultReasoning = loadedSelection ? state.active_settings?.reasoning ?? model.reasoning : model?.reasoning;
   if ([...$("reasoning").options].some(item => item.value === defaultReasoning)) $("reasoning").value = defaultReasoning;
   $("system-prompt").value = loadedSelection ? state.active_settings?.system_prompt || "" : "";
-  $("settings-help").textContent = model ? `Client settings override default reasoning. ${limits?.adjustable ? `Context capacity is a launch setting (${limits.min.toLocaleString()}–${limits.max.toLocaleString()} tokens), applied when the model loads.` : "Context capacity is fixed by this model/profile."} ${model.reasoning_change === "restart" ? "Changing default reasoning requires a model reload." : model.reasoning_change === "request" ? "Default reasoning is applied to requests after loading." : "Default reasoning is fixed by this model/profile."}` : "Select a model to view its supported settings.";
+  $("settings-help").textContent = model ? `Client settings override default reasoning. ${limits?.adjustable ? `Context capacity is a launch setting (${limits.min.toLocaleString()}–${limits.max.toLocaleString()} tokens), applied when the model loads.` : "Context capacity is fixed by this model/profile."}${slotLimits?.adjustable ? ` Slots are concurrent chat sessions (${slotLimits.min}–${slotLimits.max}); the context is per slot, so memory follows slots × context. Changing slots restarts the model.` : ""} ${model.reasoning_change === "restart" ? "Changing default reasoning requires a model reload." : model.reasoning_change === "request" ? "Default reasoning is applied to requests after loading." : "Default reasoning is fixed by this model/profile."}` : "Select a model to view its supported settings.";
   buttons();
 }
 function models(preferred = null) {
@@ -252,7 +263,12 @@ function updateModelFootprint() {
   if (!authenticated || !footprintData) text = "Memory footprint appears after sign-in.";
   else if (!model) text = "Select a model to see its memory footprint.";
   else if (!entry) text = "No footprint information for this model.";
-  else if (!entry.calibrated) { text = "Not calibrated: loading it unloads the auxiliary services until its memory is recorded."; warn = true; }
+  else if (entry.by_slots && $("slots").value && Number($("slots").value) !== entry.slots) {
+    const found = entry.by_slots[$("slots").value], count = Number($("slots").value);
+    if (!found?.calibrated) { text = `Not measured at ${count} slots: loading it unloads the auxiliary services until its memory is recorded.`; warn = true; }
+    else text = `${fmtGiB(found.needs_bytes)} ${found.source} at ${count} slots`;
+  }
+  else if (!entry.calibrated) { text = `Not calibrated${entry.by_slots ? " at " + entry.slots + (entry.slots === 1 ? " slot" : " slots") : ""}: loading it unloads the auxiliary services until its memory is recorded.`; warn = true; }
   else text = `${fmtGiB(entry.needs_bytes)} ${entry.source}` + (entry.fits_with_loaded_services == null ? "" : entry.fits_with_loaded_services ? " · fits with the loaded services" : " · the loaded services would unload");
   chip.textContent = text; chip.className = warn ? "small chipline warn" : "small chipline";
 }
@@ -353,7 +369,7 @@ async function poll() {
     if (slots) slotText = slots.available == null
       ? ` · Chat slot availability unknown (limit ${slots.total})`
       : ` · Chat slots: ${slots.available}/${slots.total} available`;
-    $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}${slotText}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
+    $("active-settings").textContent = active ? `Active context: ${active.context ?? "unknown"} tokens${active.context_source ? " (" + active.context_source + ")" : ""} · Default reasoning: ${active.reasoning ?? "unknown"}${active.slots != null ? ` · Selected slots: ${active.slots}` : ""}${slotText}. Native context readback may differ from selected capacity.` : "Active settings unavailable";
     $("busy").textContent = s.busy === true ? "Processing" : s.busy === false ? "Idle" : "Unknown";
     $("activity").textContent = s.active_requests + " active gateway request(s)";
     $("generation").textContent = describeGeneration(s.generation);
@@ -475,7 +491,7 @@ $("sessions-toggle").onclick = () => $("sessions-panel").hidden ? loadSessions()
 $("sessions-refresh").onclick = loadSessions;
 $("refresh-catalog").onclick = async () => {
   const engine = $("engine").value, model = $("model").value;
-  const context = $("context").value, custom = $("custom-context").value, reasoning = $("reasoning").value, systemPrompt = $("system-prompt").value;
+  const context = $("context").value, custom = $("custom-context").value, reasoning = $("reasoning").value, systemPrompt = $("system-prompt").value, slotCount = $("slots").value;
   $("refresh-catalog").disabled = true;
   try {
     await refreshCatalog(engine, model, true);
@@ -483,6 +499,7 @@ $("refresh-catalog").onclick = async () => {
       if ([...$("context").options].some(o => o.value === context)) $("context").value = context;
       $("custom-context").value = custom; $("custom-context-field").hidden = context !== "custom" || !selectedModel()?.context_limits?.adjustable;
       if ([...$("reasoning").options].some(o => o.value === reasoning)) $("reasoning").value = reasoning;
+      if ([...$("slots").options].some(o => o.value === slotCount)) $("slots").value = slotCount;
       $("system-prompt").value = systemPrompt;
     }
     notice("Model catalog refreshed. Current model selection and settings are preserved when supported.");
@@ -491,6 +508,7 @@ $("refresh-catalog").onclick = async () => {
 };
 $("engine").onchange = () => { models(); buttons(); };
 $("model").onchange = () => { capabilities(); buttons(); }; $("force").onchange = buttons;
+$("slots").onchange = updateModelFootprint;
 $("context").onchange = () => { $("custom-context-field").hidden = $("context").value !== "custom"; $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); if ($("context").value === "custom") $("custom-context").focus(); };
 $("custom-context").oninput = () => { $("context-error").textContent = ""; $("custom-context").removeAttribute("aria-invalid"); };
 $("select-engine").onclick = () => { if ($("engine").value) action("/api/engine", {engine: $("engine").value}); };
@@ -505,6 +523,7 @@ $("load").onclick = () => {
     }
     body.context = value;
   }
+  if (model.slot_limits?.adjustable) body.slots = Number($("slots").value);
   if ((model.reasoning_modes || ["auto"]).length > 1) body.reasoning = $("reasoning").value;
   if (model.system_prompt_supported !== false) body.system_prompt = $("system-prompt").value;
   action("/api/model", body);

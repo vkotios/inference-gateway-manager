@@ -26,11 +26,11 @@ Control authority includes force interruption and optionally administrator-enabl
 
 | Method | Route | Body / result |
 |---|---|---|
-| GET | `/api/engines` | `engines[]` with engine `id`, `label`, `models[]` containing `id`, `context`, `enabled`, `context_limits`, `reasoning_modes`, `reasoning_change` |
+| GET | `/api/engines` | `engines[]` with engine `id`, `label`, `models[]` containing `id`, `context`, `chat_slots`, `enabled`, `context_limits`, `slot_limits`, `reasoning_modes`, `reasoning_change` |
 | GET | `/api/status` | `selected_engine`, `loaded_model`, `active_settings`, `selection_id`, `phase`, `busy`, `native_busy`, `occupancy_source`, `active_requests`, `requests`, `error`, process identities |
 | GET | `/api/telemetry` | Host measurements; unavailable counters remain null |
 | POST | `/api/engine` | `{"engine":"ENGINE_ID","force":false}`; select only, stop previous engine if switching |
-| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; optional `engine`, `context`, `reasoning`, `system_prompt`; validate before stopping, context changes reload |
+| POST | `/api/model` | `{"model":"MODEL_ID","force":false}`; optional `engine`, `context` (per slot), `slots`, `reasoning`, `system_prompt`; validate before stopping, context or slot-count changes reload; omitted settings keep the selection |
 | POST | `/api/unload` | `{"force":false}`; stop model/backend, retain selected engine |
 | GET | `/v1/models` | Enabled models with `owned_by`, `context_length`, loaded/unloaded `status` |
 | POST | `/v1/chat/completions` | OpenAI-compatible body; `model` must equal loaded model; SSE supported |
