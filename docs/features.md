@@ -159,6 +159,8 @@ the validated settings, and removes the copy after verified shutdown. It never e
 original engine configuration. The example includes the actual Strata dense/native pack
 layout and its explicit native GGUF and tokenizer companions.
 
+Two more launch placeholders are rendered in the same places as `{context}` (argv entries and `config_template` values): `{slots}`, the model's `chat_slots` (1 when it declares none), and `{slots_x_context}`, `chat_slots` times the selected context. They suit an engine whose shared KV pool should follow both, such as Halogen Flash's `HALOGEN_KV_SLOTS={slots}` and `HALOGEN_KV_POOL_POSITIONS={slots_x_context}` (see [Halogen Flash](halogen-flash.md)). `{slots_x_context}` needs a model with a declared context. Today `{slots}` is the configured `chat_slots`; per-load slot selection is a later change. A model that uses either placeholder has `chat_slots` in its launch fingerprint.
+
 Generic GGUF registration offers Auto reasoning only. The separate hybrid-Qwen profile
 is for reviewed compatible templates; selecting a profile is not an automatic proof that
 every model with the same architecture supports that template's reasoning controls.

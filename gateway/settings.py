@@ -125,6 +125,21 @@ def validate_capabilities(spec):
             raise ValueError("Restart reasoning controls need administrator argv")
 
 
+def render_launch(text, context, chat_slots):
+    """Substitute the administrator's launch placeholders in one string.
+
+    ``{context}`` is the selected context; ``{slots}`` is the model's ``chat_slots`` (1 when it
+    declares none); ``{slots_x_context}`` is ``chat_slots`` times the context, for engines whose
+    shared KV pool is sized for every slot at the full context. The only place that knows the
+    placeholders: the argv and every ``config_template`` value both go through it.
+    """
+    if "{slots_x_context}" in text:
+        if type(context) is not int:
+            raise HTTPException(422, "{slots_x_context} needs a model with a declared context")
+        text = text.replace("{slots_x_context}", str(chat_slots * context))
+    return text.replace("{slots}", str(chat_slots)).replace("{context}", str(context))
+
+
 def select(spec, context=None, reasoning=None, system_prompt=None):
     try:
         validate_capabilities(spec)
@@ -151,14 +166,15 @@ def select(spec, context=None, reasoning=None, system_prompt=None):
     if system_prompt and not caps["system_prompt_supported"]:
         raise HTTPException(422, "System prompt is not supported by this model")
     chosen = copy.deepcopy(spec)
-    chosen["argv"] = [a.replace("{context}", str(requested_context)) for a in chosen["argv"]]
+    slots = spec.get("chat_slots", 1)
+    chosen["argv"] = [render_launch(a, requested_context, slots) for a in chosen["argv"]]
     chosen["argv"].extend(chosen.get("reasoning_argv", {}).get(reasoning, []))
     if "config_template" in chosen:
         chosen["_config_template"] = copy.deepcopy(chosen["config_template"])
 
         def render(value):
             if isinstance(value, str):
-                return value.replace("{context}", str(requested_context))
+                return render_launch(value, requested_context, slots)
             if isinstance(value, list):
                 return [render(item) for item in value]
             if isinstance(value, dict):

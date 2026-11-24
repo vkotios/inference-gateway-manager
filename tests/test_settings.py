@@ -392,3 +392,79 @@ async def test_strata_private_generated_config_keeps_trusted_args_and_context(tm
     finally:
         await m.close()
     assert not list(tmp_path.glob("launch-*.json"))
+
+
+def slots_spec(tmp_path, **extra):
+    spec = settings_config(tmp_path)["engines"]["one"]["models"]["fixture"]
+    spec["context"] = 131072
+    spec["context_limits"] = {
+        "min": 1024,
+        "max": 262144,
+        "presets": [65536, 131072, 262144],
+        "adjustable": True,
+    }
+    spec["argv"] += ["-e", "POOL={slots_x_context}", "-e", "SLOTS={slots}"]
+    spec.update(extra)
+    return spec
+
+
+def test_select_renders_slots_and_slots_x_context_in_argv_and_config_template(tmp_path):
+    from gateway.settings import select
+
+    spec = slots_spec(
+        tmp_path,
+        chat_slots=3,
+        config_template={
+            "pool": "X={slots_x_context}",
+            "nested": [{"n": "N={slots}", "c": "C={context}"}, "keep", 7],
+        },
+    )
+    chosen, settings = select(spec, 131072)
+    assert settings["context"] == 131072
+    assert chosen["argv"][-4:] == ["-e", "POOL=393216", "-e", "SLOTS=3"]
+    assert "131072" in chosen["argv"]  # the {context} binding is unchanged
+    assert chosen["config_template"] == {
+        "pool": "X=393216",
+        "nested": [{"n": "N=3", "c": "C=131072"}, "keep", 7],
+    }
+    assert chosen["_config_template"]["pool"] == "X={slots_x_context}"  # the template is kept
+    smaller, _ = select(spec, 65536)
+    assert smaller["argv"][-4:] == ["-e", "POOL=196608", "-e", "SLOTS=3"]
+    assert smaller["config_template"]["pool"] == "X=196608"
+    # without chat_slots a model has one slot
+    single, _ = select(slots_spec(tmp_path), 131072)
+    assert single["argv"][-4:] == ["-e", "POOL=131072", "-e", "SLOTS=1"]
+
+
+def test_slots_x_context_needs_a_declared_context():
+    from gateway.settings import select
+
+    spec = {"argv": ["engine", "--pool", "{slots_x_context}"], "base_url": "http://127.0.0.1:1"}
+    with pytest.raises(HTTPException) as refused:
+        select(spec)
+    assert refused.value.status_code == 422 and "declared context" in refused.value.detail
+    # {slots} alone needs no context
+    chosen, _ = select({**spec, "argv": ["engine", "--slots", "{slots}"], "chat_slots": 2})
+    assert chosen["argv"] == ["engine", "--slots", "2"]
+
+
+@pytest.mark.asyncio
+async def test_context_change_rerenders_slots_x_context_from_the_template(tmp_path):
+    cfg = settings_config(tmp_path)
+    cfg["engines"]["one"]["models"]["fixture"] = slots_spec(tmp_path, chat_slots=3)
+    m = Manager(cfg, tmp_path)
+    try:
+        engine, first, settings = m.prepare_model("fixture", engine="one", context=131072)
+        assert "POOL=393216" in first["argv"]
+        # the model is now "loaded": its argv is frozen (rendered) and only the template can be re-rendered
+        m.engine, m.model, m.active_spec, m.selected_settings = engine, "fixture", first, settings
+        _, second, again = m.prepare_model("fixture", context=65536)
+        assert again["context"] == 65536
+        assert "POOL=196608" in second["argv"] and "POOL=393216" not in second["argv"]
+        assert "POOL={slots_x_context}" in second["_argv_template"]
+        # omitted settings keep the selected context, and the slot product follows it
+        _, third, kept = m.prepare_model("fixture")
+        assert kept["context"] == 131072 and "POOL=393216" in third["argv"]
+        assert "POOL={slots_x_context}" in cfg["engines"]["one"]["models"]["fixture"]["argv"]
+    finally:
+        await m.close()
