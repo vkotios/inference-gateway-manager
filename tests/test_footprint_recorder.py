@@ -182,3 +182,25 @@ async def test_stop_writes_final_peak_and_clears_state(tmp_path):
     await tracker.stop()
     assert store.lookup("chat", "e/m", "fp", 1).peak_bytes == 44 * GIB
     assert tracker.current is None and tracker.task is None
+
+
+def test_the_record_note_says_which_slot_count_it_was_measured_at(tmp_path):
+    used, tree = {"v": 10 * GIB}, {"v": (0, 0)}
+    tracker, store, clock = make(tmp_path, used, tree)
+    tracker.begin_load("e/m", "fp", 4096, 2)
+    used["v"] = 70 * GIB
+    tree["v"] = (58 * GIB, 0)
+    tracker.start()
+    clock.now = 31
+    tracker.tick()
+    record = store.lookup("chat", "e/m", "fp", 4096)
+    assert record.note.split("; ")[:2] == ["settled", "slots=2"]
+    assert tracker.snapshot()["slots"] == 2
+    # a launch that never says its count keeps the note it always had
+    (tmp_path / "b").mkdir()
+    tracker2, store2, clock2 = make(tmp_path / "b", used, tree)
+    tracker2.begin_load("e/m", "fp", 4096)
+    tracker2.start()
+    clock2.now = 31
+    tracker2.tick()
+    assert "slots=" not in store2.lookup("chat", "e/m", "fp", 4096).note

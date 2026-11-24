@@ -71,17 +71,25 @@ def create_server(client):
         context: int | None = None,
         reasoning: Literal["auto", "on", "off"] | None = None,
         system_prompt: str | None = None,
+        slots: int | None = None,
     ) -> dict:
         """Explicitly load a model and settings when idle. Never forces interruption.
 
-        Context changes restart the engine; reasoning is a client-overridable default.
+        Context and slot-count changes restart the engine; reasoning is a client-overridable
+        default. Slots (concurrent chat sessions) change the memory footprint: the context is per
+        slot, so memory follows slots times context. Omit slots to keep the current selection.
         System prompts prepend client instructions; omit to retain, or pass empty text to clear.
         Return and preserve selection_id for subsequent delegation. Loading can take minutes.
         Loading a model can unload the CPU transcription and embedding services when they do not
         fit with it (or its memory footprint is not recorded); see gateway_footprints first.
         """
         return await client.load(
-            engine, model, context=context, reasoning=reasoning, system_prompt=system_prompt
+            engine,
+            model,
+            context=context,
+            reasoning=reasoning,
+            system_prompt=system_prompt,
+            slots=slots,
         )
 
     @server.tool(annotations=change)

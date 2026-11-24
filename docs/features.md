@@ -23,7 +23,7 @@ For the currently loaded engine/model, omitted context or reasoning keeps its ex
 selection. A different model inherits its configured defaults. Send an explicit capacity
 or `"reasoning":"auto"` to reset that setting to a known value.
 
-`GET /api/engines` exposes each model's `context_limits`, `reasoning_modes` and
+`GET /api/engines` exposes each model's `context_limits`, `slot_limits`, `chat_slots`, `reasoning_modes` and
 `reasoning_change`. Legacy entries without explicit capabilities remain fixed. An
 administrator must declare a supported binding before the UI offers an adjustment.
 Use the example profiles as templates and check the installed engine's actual flags.
@@ -160,6 +160,8 @@ original engine configuration. The example includes the actual Strata dense/nati
 layout and its explicit native GGUF and tokenizer companions.
 
 Two more launch placeholders are rendered in the same places as `{context}` (argv entries and `config_template` values): `{slots}`, the model's `chat_slots` (1 when it declares none), and `{slots_x_context}`, `chat_slots` times the selected context. They suit an engine whose shared KV pool should follow both, such as Halogen Flash's `HALOGEN_KV_SLOTS={slots}` and `HALOGEN_KV_POOL_POSITIONS={slots_x_context}` (see [Halogen Flash](halogen-flash.md)). `{slots_x_context}` needs a model with a declared context. Today `{slots}` is the configured `chat_slots`; per-load slot selection is a later change. A model that uses either placeholder has `chat_slots` in its launch fingerprint.
+
+**Choosing the slot count per load.** A model can declare `slot_limits` (`min`, `max`, `presets`, `adjustable`, all integers of at least 1, with `min <= chat_slots <= max`) and the load request, `gateway_load` and the dashboard's **Slots** select then accept `slots` within them. The selected count replaces `chat_slots` in the launch that is frozen at load, so `{slots}` and `{slots_x_context}` render with it, the chat capacity reported by `/api/status` and the admission broker's slot total follow it, and a reload that omits `slots` keeps the selected count. `context` stays per slot. Adjustable limits need a `{slots}` binding in the argv or `config_template`; without `slot_limits` a model is fixed at its `chat_slots`. A different count restarts the engine (as a different context does); changing only reasoning or the system prompt does not. Slots change the memory footprint, so a model's recorded footprints are per launch fingerprint, which includes `chat_slots` whenever a placeholder is bound: the first load at a new slot count is uncalibrated until its footprint settles, and each record's note says `slots=N`. `GET /api/footprints` lists each model at its own `chat_slots` and, for a model with adjustable slots, whether each preset count has a record (`by_slots`); **Calibrate** reloads at the model's own count. Example opt-in for a llama.cpp model: `--parallel {slots}`, `--ctx-size {slots_x_context}` and `"slot_limits": {"min": 1, "max": 4, "presets": [1, 2, 3, 4], "adjustable": true}`; at 1 slot the command line is the one it had before.
 
 Generic GGUF registration offers Auto reasoning only. The separate hybrid-Qwen profile
 is for reviewed compatible templates; selecting a profile is not an automatic proof that

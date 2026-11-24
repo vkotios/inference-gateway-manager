@@ -71,6 +71,7 @@ class DashboardAPI:
             {"name": "pack", "path": "pack", "kind": "directory"},
         ]
         self.errors = {}
+        self.footprints = {}
         self.state = {
             "phase": "idle",
             "selected_engine": "one",
@@ -178,6 +179,8 @@ class DashboardAPI:
             result = {"engines": self.engines}
         elif path == "status":
             result = self.state.copy()
+        elif path == "footprints":
+            result = self.footprints
         elif path == "recovery":
             result = {"restart_gateway": True, "reboot_host": True, "pending": False}
         elif path == "telemetry":
@@ -789,3 +792,73 @@ async def test_admission_settings_form_builds_a_calendar_and_keeps_edits_across_
     await page.locator("#confirm-accept").click()
     await expect(page.locator("#admission-status")).to_contain_text("Using the configured")
     assert saved[-1] == {"settings": None}
+
+
+async def test_slots_select_follows_slot_limits_and_is_sent_with_the_load(
+    browser_page, live_gateway
+):
+    page = browser_page
+    api = await mocked_dashboard(page, live_gateway[0])
+    api.engines[0]["models"].append(
+        {
+            "id": "slotted",
+            "context": 4096,
+            "chat_slots": 1,
+            "enabled": True,
+            "context_limits": {"min": 512, "max": 8192, "presets": [4096], "adjustable": True},
+            "slot_limits": {"min": 1, "max": 4, "presets": [1, 2, 4], "adjustable": True},
+            "reasoning_modes": ["auto"],
+            "reasoning_change": "fixed",
+        }
+    )
+    gib = 1024**3
+    api.footprints = {
+        "records": [],
+        "loaded": None,
+        "memory": {"total_bytes": 100 * gib, "available_bytes": 70 * gib},
+        "compatibility": [
+            {
+                "engine": "one",
+                "model": "slotted",
+                "context": 8192,
+                "slots": 1,
+                "calibrated": True,
+                "source": "measured",
+                "needs_bytes": 30 * gib,
+                "fits_with_loaded_services": None,
+                "by_slots": {
+                    "1": {"calibrated": True, "source": "measured", "needs_bytes": 30 * gib},
+                    "2": {"calibrated": False, "source": None, "needs_bytes": None},
+                    "4": {"calibrated": True, "source": "measured", "needs_bytes": 90 * gib},
+                },
+            }
+        ],
+    }
+    await login(page)
+    slots = page.locator("#slots")
+    # a model without adjustable slot_limits has no slots control and sends no slots
+    await page.locator("#model").select_option("fixture")
+    await expect(page.locator("#slots-field")).to_be_hidden()
+    await page.get_by_role("button", name="Load model", exact=True).click()
+    await expect(page.locator("#notice")).to_have_text("Lifecycle action completed.")
+    assert "slots" not in [r for r in api.requests if r[1] == "model"][-1][2]
+    # an adjustable one shows the presets, defaults to its own count and reports what is measured
+    await page.locator("#model").select_option("slotted")
+    await expect(page.locator("#slots-field")).to_be_visible()
+    assert await slots.locator("option").evaluate_all("o => o.map(x => x.value)") == ["1", "2", "4"]
+    await expect(slots).to_have_value("1")
+    await expect(page.locator("#model-footprint")).to_contain_text("30.0 GiB measured")
+    await slots.select_option("2")
+    await expect(page.locator("#model-footprint")).to_contain_text("Not measured at 2 slots")
+    await slots.select_option("4")
+    await expect(page.locator("#model-footprint")).to_contain_text("measured at 4 slots")
+    await page.get_by_role("button", name="Load model", exact=True).click()
+    await expect(page.locator("#notice")).to_have_text("Lifecycle action completed.")
+    sent = [r for r in api.requests if r[1] == "model"][-1][2]
+    assert sent["slots"] == 4 and sent["model"] == "slotted"
+    # the active settings line shows the selected count
+    api.state.update(
+        loaded_model="slotted", active_settings={"context": 8192, "reasoning": "auto", "slots": 4}
+    )
+    await page.evaluate("poll()")
+    await expect(page.locator("#active-settings")).to_contain_text("Selected slots: 4")

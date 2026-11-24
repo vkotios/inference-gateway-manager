@@ -88,6 +88,7 @@ class ModelSelection(Force):
     model: str
     engine: str | None = None
     context: StrictInt | None = None
+    slots: StrictInt | None = None
     reasoning: str | None = None
     system_prompt: StrictStr | None = Field(default=None, max_length=16384)
 
@@ -763,6 +764,7 @@ def create_app(config, admin_key, inference_key, state_dir):
                 context=payload.context,
                 reasoning=payload.reasoning,
                 system_prompt=payload.system_prompt,
+                slots=payload.slots,
             )
         except (OSError, RuntimeError, TimeoutError):
             raise HTTPException(503, "Backend startup failed; inspect local engine log") from None
@@ -818,9 +820,13 @@ def create_app(config, admin_key, inference_key, state_dir):
                 if not model_cfg.get("enabled", True):
                     continue
                 limits = model_cfg.get("context_limits", {})
+                default_slots = model_cfg.get("chat_slots", 1)
                 try:
                     _engine, spec, settings = manager.prepare_model(
-                        model_id, engine_id, limits.get("max") or model_cfg.get("context")
+                        model_id,
+                        engine_id,
+                        limits.get("max") or model_cfg.get("context"),
+                        slots=default_slots,
                     )
                 except (HTTPException, ValueError, KeyError, TypeError):
                     continue
@@ -833,17 +839,43 @@ def create_app(config, admin_key, inference_key, state_dir):
                     if live
                     else None
                 )
-                compatibility.append(
-                    {
-                        "engine": engine_id,
-                        "model": model_id,
-                        "context": settings.get("context"),
-                        "calibrated": record is not None,
-                        "source": record.source if record else None,
-                        "needs_bytes": record.needs_bytes if record else None,
-                        "fits_with_loaded_services": decision.fits if decision else None,
-                    }
-                )
+                entry = {
+                    "engine": engine_id,
+                    "model": model_id,
+                    "context": settings.get("context"),
+                    "slots": default_slots,
+                    "calibrated": record is not None,
+                    "source": record.source if record else None,
+                    "needs_bytes": record.needs_bytes if record else None,
+                    "fits_with_loaded_services": decision.fits if decision else None,
+                }
+                slot_limits = model_cfg.get("slot_limits", {})
+                if slot_limits.get("adjustable"):
+                    # Whether each selectable slot count has a record, at the same (maximum) context.
+                    by_slots = {}
+                    for count in slot_limits.get("presets", []):
+                        try:
+                            _e, count_spec, count_settings = manager.prepare_model(
+                                model_id,
+                                engine_id,
+                                limits.get("max") or model_cfg.get("context"),
+                                slots=count,
+                            )
+                        except (HTTPException, ValueError, KeyError, TypeError):
+                            continue
+                        found = store.lookup(
+                            "chat",
+                            key,
+                            chat_fingerprint(engine_id, model_id, count_spec),
+                            count_settings.get("context"),
+                        )
+                        by_slots[str(count)] = {
+                            "calibrated": found is not None,
+                            "source": found.source if found else None,
+                            "needs_bytes": found.needs_bytes if found else None,
+                        }
+                    entry["by_slots"] = by_slots
+                compatibility.append(entry)
         for name, service in auxiliary.services.items():
             for model_id in service.models:
                 fingerprints[(name, model_id)] = auxiliary.aux_fp(name, model_id)
@@ -917,7 +949,11 @@ def create_app(config, admin_key, inference_key, state_dir):
         try:
             try:
                 await manager.load_model(
-                    payload.model, False, engine=payload.engine, context=context
+                    payload.model,
+                    False,
+                    engine=payload.engine,
+                    context=context,
+                    slots=model_cfg.get("chat_slots", 1),
                 )
                 if not aborted:
                     await asyncio.sleep(tracker.settle_seconds + tracker.interval + 1)

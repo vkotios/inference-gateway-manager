@@ -186,3 +186,30 @@ async def test_mcp_load_exposes_and_forwards_selection_system_prompt():
         {"engine": "one", "model": "fixture", "force": False},
         {"engine": "one", "model": "fixture", "force": False, "system_prompt": ""},
     ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_load_exposes_and_forwards_slots():
+    from gateway.client import GatewayClient
+    from gateway.mcp import create_server
+
+    requests = []
+
+    def backend(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"selection_id": "selected"})
+
+    async with GatewayClient(
+        "http://gateway.lan", "a" * 32, transport=httpx.MockTransport(backend)
+    ) as client:
+        server = create_server(client)
+        load = next(tool for tool in await server.list_tools() if tool.name == "gateway_load")
+        assert "slots" in load.inputSchema["properties"]
+        assert "slots" not in load.inputSchema.get("required", [])
+        assert "slot" in load.description and "restart" in load.description
+        for extra in ({"slots": 2}, {}):
+            await server.call_tool("gateway_load", {"engine": "one", "model": "fixture", **extra})
+    assert requests == [
+        {"engine": "one", "model": "fixture", "force": False, "slots": 2},
+        {"engine": "one", "model": "fixture", "force": False},
+    ]

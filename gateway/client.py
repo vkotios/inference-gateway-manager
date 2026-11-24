@@ -133,10 +133,14 @@ class GatewayClient:
     async def footprints(self):
         return await self.request("GET", "/api/footprints")
 
-    async def load(self, engine, model, *, context=None, reasoning=None, system_prompt=None):
+    async def load(
+        self, engine, model, *, context=None, reasoning=None, system_prompt=None, slots=None
+    ):
         body = {"engine": model_id(engine), "model": model_id(model), "force": False}
         if context is not None:
             body["context"] = positive_int(context, "context", 10_000_000)
+        if slots is not None:
+            body["slots"] = positive_int(slots, "slots", 64)
         if reasoning is not None:
             if reasoning not in ("auto", "on", "off"):
                 raise ValueError("reasoning must be auto, on or off")

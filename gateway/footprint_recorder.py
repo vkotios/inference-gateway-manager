@@ -122,8 +122,8 @@ class FootprintTracker:
 
     # -- before / after launch -------------------------------------------------------
 
-    def begin_load(self, key, fingerprint, context):
-        """Capture the baseline immediately before an engine launches."""
+    def begin_load(self, key, fingerprint, context, slots=None):
+        """Capture the baseline immediately before an engine launches. ``slots`` only labels the record."""
         try:
             baseline = max(0, self.sample_used() - self.aux_resident())
         except (OSError, ValueError):
@@ -132,6 +132,7 @@ class FootprintTracker:
             "key": key,
             "fingerprint": fingerprint,
             "context": context,
+            "slots": slots,
             "baseline": baseline,
         }
 
@@ -256,7 +257,11 @@ class FootprintTracker:
             cur["fingerprint"],
             "measured",
             time.time(),
-            f"{reason}{'; ' + note if note else ''}",
+            "; ".join(
+                part
+                for part in (reason, f"slots={cur['slots']}" if cur.get("slots") else "", note)
+                if part
+            ),
         )
         cur["record"] = self.store.record(footprint)
         cur["flushed_peak"] = peak
@@ -279,6 +284,7 @@ class FootprintTracker:
         return {
             "key": cur["key"],
             "context": cur["context"],
+            "slots": cur.get("slots"),
             "settled": cur["settled"],
             "samples": cur["samples"],
             "peak_bytes": peak,
